@@ -4,7 +4,7 @@ pve-find - find vm's or containers over multiple clusters and/or systems.
 
 # SYNOPSIS
 
- pve-find [name]
+`pve-find [name]`
 
 # DESCRIPTION
 
@@ -31,20 +31,20 @@ Each section name is the name of the cluster or node that needs to be checked.
 
 In each section the following fields need to be present:
 
-* `hostname`
+* `hostname`<br>
 Specifies the hostname of the node or a node in the cluster. No protocol or port
 numbers should be specified, just the name.<br>
 For example:<br>
 `hostname=pvenode.example.com`
 
-* `user`
+* `user`<br>
 User to log in as. The user can have minimal rights, as long as information about
 all containers and vm's can be retrieved. The realm that the user exists in needs
 to be specified.<br>
 So, for example for the user info in the realm pve:<br>
 `user=info@pve`
 
-* `password`
+* `password`<br>
 This is the password coupled to the specified user.
 
 # FILES
