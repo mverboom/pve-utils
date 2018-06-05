@@ -18,7 +18,7 @@ All names that match will be shown.
 
 The script requires a configuration file which should be locates at:
 
-`~/.pve-find.ini
+`~/.pve-find.ini`
 
 An example configuration file is included.
 
@@ -31,24 +31,25 @@ Each section name is the name of the cluster or node that needs to be checked.
 
 In each section the following fields need to be present:
 
-`hostname`
+* `hostname`
 Specifies the hostname of the node or a node in the cluster. No protocol or port
 numbers should be specified, just the name.
+
 For example:
 `hostname=pvenode.example.com`
 
-`user`
+* `user`
 User to log in as. The user can have minimal rights, as long as information about
 all containers and vm's can be retrieved. The realm that the user exists in needs
 to be specified. So, for example for the user info in the realm pve:
 `user=info@pve`
 
-`password`
+* `password`
 This is the password coupled to the specified user.
 
 # FILES
 
-`~/.pve-find.ini
+`~/.pve-find.ini`
 
 Configuration file
 
