@@ -57,10 +57,10 @@ Configuration file
 
 Find all vm's or containers where the name contains server
 
-```pve-find server
-production: server1
-production: server2
-test: server-test```
+    pve-find server
+    production: server1
+    production: server2
+    test: server-test
 
 # AUTHOR
 
