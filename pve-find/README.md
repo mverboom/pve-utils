@@ -33,15 +33,15 @@ In each section the following fields need to be present:
 
 * `hostname`
 Specifies the hostname of the node or a node in the cluster. No protocol or port
-numbers should be specified, just the name.
-
-For example:
+numbers should be specified, just the name.<br>
+For example:<br>
 `hostname=pvenode.example.com`
 
 * `user`
 User to log in as. The user can have minimal rights, as long as information about
 all containers and vm's can be retrieved. The realm that the user exists in needs
-to be specified. So, for example for the user info in the realm pve:
+to be specified.<br>
+So, for example for the user info in the realm pve:<br>
 `user=info@pve`
 
 * `password`
