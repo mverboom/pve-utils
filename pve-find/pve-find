@@ -1,0 +1,79 @@
+#!/bin/bash
+#
+# ToDo:
+# * jq
+# * .pve-find.ini
+
+CFG=~/.pve-find.ini
+SW="jq curl"
+
+usage() {
+   echo "pve-find name"
+   exit 1
+}
+
+parse_config() {
+
+   while IFS='= ' read var val
+   do
+      if [[ $var == \[*] ]]
+      then
+          section=${var:1:-1}
+      elif [[ $val ]]
+      then
+          declare -g -A "$var[$section]=$val"
+      fi
+   done < $CFG
+}
+
+find_name() {
+   cluster=$1
+   name=$2
+
+   COOKIE=/tmp/ckie
+   data=$(curl -s -k -d "username=${user[$cluster]}&password=${password[$cluster]}"  https://${hostname[$cluster]}:8006/api2/json/access/ticket)
+   cookie=$(echo $data | jq --raw-output '.data.ticket' | sed 's/^/PVEAuthCookie=/')
+   token=$(echo $data | jq --raw-output '.data.CSRFPreventionToken')
+   CURL='curl -f -s -S -k -b $cookie -H "CSRFPreventionToken: '$token'" '
+   CURL="curl -f -s -S -k -b $cookie"
+   
+   nodes="$($CURL -H "CSRFPreventionToken: $token" https://${hostname[$cluster]}:8006/api2/json/nodes/ | jq -r ".data[] | .node")"
+   for node in $nodes
+   do
+      match=$($CURL -H "CSRFPreventionToken: $token" https://${hostname[$cluster]}:8006/api2/json/nodes/$node/lxc/ | jq -r ".data[] | .name" | grep -i $name)
+      test "$match" != "" && { for zone in $match; do echo "$node: $zone (lxc)"; done; }
+      match=$($CURL -H "CSRFPreventionToken: $token" https://${hostname[$cluster]}:8006/api2/json/nodes/$node/qemu/ | jq -r ".data[] | .name" | grep -i $name)
+      test "$match" != "" && { for zone in $match; do echo "$node: $zone (qemu)"; done; }
+   done
+   rm -f $cookie
+}
+
+sanity_check() {
+   ! test -f $CFG && { echo "No config file found ($CFG)."; usage; }
+
+   for name in $SW
+   do
+      if ! which $name > /dev/null 2>&1
+      then
+         missing="$missing $name"
+      fi
+   done
+   test "$missing" != "" && { echo "Missing required software to run script:$missing" ; exit 1;}
+}
+
+main() {
+   unset https_proxy
+
+   sanity_check
+
+   parse_config
+
+   name=$1
+
+   for cluster in ${!hostname[*]}
+   do
+      find_name $cluster $name
+   done
+}
+
+main "$@"

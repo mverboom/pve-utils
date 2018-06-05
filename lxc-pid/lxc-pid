@@ -1,0 +1,8 @@
+#!/bin/bash
+#
+# Find container for given process id
+
+test $# -eq 1 && PID=$1 || { echo "Usage: $0 <process id>"; exit 1; }
+test -d /proc/$PID || { echo "No proccess id $PID"; exit 1; }
+CTID=$(cat /proc/$PID/cgroup | head -1 | cut -d: -f 3 | cut -d '/' -f 3)
+test "$CTID" = "" && echo "0" || echo "$CTID"
