@@ -32,8 +32,6 @@ find_name() {
    cluster=$1
    name=$2
 
-   COOKIE=/tmp/ckie
-
    data=$(curl -s -k -d "username=${user[$cluster]}&password=${password[$cluster]}"  https://${hostname[$cluster]}:8006/api2/json/access/ticket)
    test "$data" = "${data/ticket/}" && { echo "Unable to login to PVE."; exit 1; }
 
@@ -50,7 +48,6 @@ find_name() {
       match=$($CURL -H "CSRFPreventionToken: $token" https://${hostname[$cluster]}:8006/api2/json/nodes/$node/qemu/ | jq -r ".data[] | .name" | grep -i $name)
       test "$match" != "" && { for zone in $match; do echo "$node: $zone (qemu)"; done; }
    done
-   rm -f $cookie
 }
 
 sanity_check() {
