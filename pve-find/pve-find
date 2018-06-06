@@ -1,8 +1,6 @@
 #!/bin/bash
 #
-# ToDo:
-# * jq
-# * .pve-find.ini
+# pvefind: find vm's/containers on proxmox systems
 
 CFG=~/.pve-find.ini
 SW="jq curl"
@@ -80,8 +78,9 @@ main() {
 
    for cluster in ${!hostname[*]}
    do
-      find_name $cluster $name
+      find_name $cluster $name &
    done
+   wait
 }
 
 main "$@"
