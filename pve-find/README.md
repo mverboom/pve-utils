@@ -53,6 +53,12 @@ Although this mainly belongs to the PVE documentation, a short list of actions
 can be found below to create a user in the proxmox environment that can be used
 by this script.
 
+## COMMANDLINE
+
+    pveum roleadd PVEVMAudit --privs VM.Audit
+    pveum useradd search@pve --password
+    pveum aclmod / --users search@pve --roles PVEVMAudit
+
 ## GRAPHICAL INTERFACE
 
 * Connect to the graphical user interface and log in
