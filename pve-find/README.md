@@ -47,6 +47,31 @@ So, for example for the user info in the realm pve:<br>
 * `password`<br>
 This is the password coupled to the specified user.
 
+# CREATING A USER
+
+Although this mainly belongs to the PVE documentation, a short list of actions
+can be found below to create a user in the proxmox environment that can be used
+by this script.
+
+## GRAPHICAL INTERFACE
+
+* Connect to the graphical user interface and log in
+* Go to: Datacenter -> Roles -> Create, and enter:
+    Name: PVEVMAudit
+    Privileges: VM.Audit
+    Create
+* Go to: Datacenter -> Users -> Add, and enter:
+    User name: search
+    Realm: Proxmox PVE authentication
+    Password:
+    Confirm password:
+    Add
+* Go to: Datacenter -> Permissions -> Add -> User Permission, and enter:
+    Path: /
+    User: search
+    Role: PVEVMAudit
+    Add
+
 # FILES
 
 `~/.pve-find.ini`

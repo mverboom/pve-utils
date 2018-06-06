@@ -8,7 +8,9 @@ CFG=~/.pve-find.ini
 SW="jq curl"
 
 usage() {
-   echo "pve-find name"
+   echo "Usage: pve-find [name]"
+   echo "Searches all nodes/clusters defined in the config file for VM/CT names containing"
+   echo "the given name."
    exit 1
 }
 
@@ -31,7 +33,10 @@ find_name() {
    name=$2
 
    COOKIE=/tmp/ckie
+
    data=$(curl -s -k -d "username=${user[$cluster]}&password=${password[$cluster]}"  https://${hostname[$cluster]}:8006/api2/json/access/ticket)
+   test "$data" = "${data/ticket/}" && { echo "Unable to login to PVE."; exit 1; }
+
    cookie=$(echo $data | jq --raw-output '.data.ticket' | sed 's/^/PVEAuthCookie=/')
    token=$(echo $data | jq --raw-output '.data.CSRFPreventionToken')
    CURL='curl -f -s -S -k -b $cookie -H "CSRFPreventionToken: '$token'" '
@@ -49,26 +54,32 @@ find_name() {
 }
 
 sanity_check() {
-   ! test -f $CFG && { echo "No config file found ($CFG)."; usage; }
+   err=0
+
+   ! test -f $CFG && { echo "No config file found ($CFG)."; err=1; }
 
    for name in $SW
    do
       if ! which $name > /dev/null 2>&1
       then
          missing="$missing $name"
+         err=1
       fi
    done
-   test "$missing" != "" && { echo "Missing required software to run script:$missing" ; exit 1;}
+   test "$missing" != "" && echo "Missing required software to run script:$missing"
+
+   test $# -ne 1 && { echo "One argument required."; err=1; }
+   name=$1
+
+   test $err -ne 0 && usage
 }
 
 main() {
    unset https_proxy
 
-   sanity_check
+   sanity_check "$@"
 
    parse_config
-
-   name=$1
 
    for cluster in ${!hostname[*]}
    do
