@@ -30,21 +30,21 @@ find_name() {
    cluster=$1
    name=$2
 
+   unset clause
+   test $active -eq 1 && clause="and .status == \"running\""
+
    data=$(curl -s -k -d "username=${user[$cluster]}&password=${password[$cluster]}"  https://${hostname[$cluster]}:8006/api2/json/access/ticket)
    test "$data" = "${data/ticket/}" && { echo "Unable to login to PVE."; exit 1; }
 
    cookie=$(echo $data | jq --raw-output '.data.ticket' | sed 's/^/PVEAuthCookie=/')
    token=$(echo $data | jq --raw-output '.data.CSRFPreventionToken')
-   CURL='curl -f -s -S -k -b $cookie -H "CSRFPreventionToken: '$token'" '
    CURL="curl -f -s -S -k -b $cookie"
-   
+
    nodes="$($CURL -H "CSRFPreventionToken: $token" https://${hostname[$cluster]}:8006/api2/json/nodes/ | jq -r ".data[] | .node")"
    for node in $nodes
    do
-      match=$($CURL -H "CSRFPreventionToken: $token" https://${hostname[$cluster]}:8006/api2/json/nodes/$node/lxc/ | jq -r ".data[] | .name" | grep -i $name)
-      test "$match" != "" && { for zone in $match; do echo "$node: $zone (lxc)"; done; }
-      match=$($CURL -H "CSRFPreventionToken: $token" https://${hostname[$cluster]}:8006/api2/json/nodes/$node/qemu/ | jq -r ".data[] | .name" | grep -i $name)
-      test "$match" != "" && { for zone in $match; do echo "$node: $zone (qemu)"; done; }
+      data="$($CURL -H "CSRFPreventionToken: $token" https://${hostname[$cluster]}:8006/api2/json/nodes/$node/lxc/) $($CURL -H "CSRFPreventionToken: $token" https://${hostname[$cluster]}:8006/api2/json/nodes/$node/qemu/)"
+      echo $data | jq -r ".data[] | select((.name  | contains(\"$name\")) $clause) | \"$node \(.name) \(.type // \"qemu\")\""
    done
 }
 
@@ -53,7 +53,7 @@ sanity_check() {
 
    ! test -f $CFG && { echo "No config file found ($CFG)."; err=1; }
 
-   test $(stat -c %a $CFG) -gt 600 && { echo "Unsafe permissions on config file."; err=1; }
+   test $err -eq 0 && test $(stat -c %a $CFG) -gt 600 && { echo "Unsafe permissions on config file."; err=1; }
 
    for name in $SW
    do
@@ -65,18 +65,21 @@ sanity_check() {
    done
    test "$missing" != "" && echo "Missing required software to run script:$missing"
 
-   test $# -ne 1 && { echo "One argument required."; err=1; }
-   name=$1
+   test $# -lt 1 && { echo "At least one argument required."; err=1; }
 
    test $err -ne 0 && usage
 }
 
 main() {
    unset https_proxy
+   active=1
 
    sanity_check "$@"
 
    parse_config
+
+   test "$1" = "-i" && { active=0; shift; }
+   name=$1
 
    for cluster in ${!hostname[*]}
    do
