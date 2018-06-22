@@ -6,9 +6,13 @@ CFG=~/.pve-find.ini
 SW="jq curl"
 
 usage() {
-   echo "Usage: pve-find [name]"
+   echo "Usage: pve-find <options> [name]"
    echo "Searches all nodes/clusters defined in the config file for VM/CT names containing"
    echo "the given name."
+   echo
+   echo "  -i      Include inactive systems."
+   echo "  -v      Be more verbose."
+   echo "  -c      Connect to the console of the first system found."
    exit 1
 }
 
@@ -44,7 +48,7 @@ find_name() {
    for node in $nodes
    do
       data="$($CURL -H "CSRFPreventionToken: $token" https://${hostname[$cluster]}:8006/api2/json/nodes/$node/lxc/) $($CURL -H "CSRFPreventionToken: $token" https://${hostname[$cluster]}:8006/api2/json/nodes/$node/qemu/)"
-      echo $data | jq -r ".data[] | select((.name  | contains(\"$name\")) $clause) | \"$node \(.name) \(.type // \"qemu\")\""
+      echo $data | jq -r ".data[] | select((.name  | contains(\"$name\")) $clause) | \"$node \(.vmid) \(.name) \(.type // \"qemu\") \(.status)\""
    done
 }
 
@@ -70,22 +74,60 @@ sanity_check() {
    test $err -ne 0 && usage
 }
 
+parse_options() {
+   while getopts :icv opt
+   do
+      case $opt in
+         v) verbose=1
+         ;;
+         c) connect=1
+         ;;
+         i) active=0
+         ;;
+         \?) echo "Unknowing options: -$OPTARG"
+             usage
+         ;;
+      esac
+   done
+   shift $((OPTIND -1))
+   name=$1
+}
+
 main() {
    unset https_proxy
    active=1
+   connect=0
+   verbose=0
 
    sanity_check "$@"
 
    parse_config
 
-   test "$1" = "-i" && { active=0; shift; }
-   name=$1
+   parse_options "$@"
+
+   output=$(tempfile)
 
    for cluster in ${!hostname[*]}
    do
-      find_name $cluster $name &
+      find_name $cluster $name >> $output &
    done
    wait
+   if test $connect = 1; then
+      read server vmid name type status < <(head -1 $output)
+      case $type in
+      "qemu")
+         test $verbose -eq 1 && echo "Connecting to server $server for $name..."
+         ssh -t $server qm terminal $vmid
+         ;;
+      "lxc")
+         test $verbose -eq 1 && echo "Connecting to server $server for $name..."
+         ssh -t $server pct enter $vmid
+         ;;
+      esac
+   else
+      cat $output
+   fi
+   rm -f $output
 }
 
 main "$@"
