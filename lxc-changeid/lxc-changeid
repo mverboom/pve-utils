@@ -47,48 +47,48 @@ parse_options() {
 check_exist() {
    test $(ls -ald /etc/pve/nodes/*/{lxc,qemu-server}/$NEWID.conf 2>/dev/null | wc -l) -ne 0 && {
       echo "ERROR: The destination ID already exists!"
-		exit 1
+      exit 1
    }
 }
 
 change_id() {
-	test $force -ne 1 && read -p "You are going to move $OLDID to $NEWID, are you sure? [y/N]" RESPONSE
+   test $force -ne 1 && read -p "You are going to move $OLDID to $NEWID, are you sure? [y/N]" RESPONSE
 
-	case $RESPONSE in
-	[yY])
-		cd /etc/pve/lxc
+   case $RESPONSE in
+   [yY])
+      cd /etc/pve/lxc
 
       OLDDISK=$(grep rootfs $OLDID.conf | awk '{print $2}' | cut -d, -f1)
 
       # Get the path in the ZFS pool for the disk and remove leading /
       OLDDISK_PATH=$(pvesm path $OLDDISK | sed 's#/##')
 
-		NEWDISK=$(echo $OLDDISK | sed "s/-$OLDID-/-$NEWID-/")
-		NEWDISK_PATH=$(echo $OLDDISK_PATH | sed "s/-$OLDID-/-$NEWID-/")
+      NEWDISK=$(echo $OLDDISK | sed "s/-$OLDID-/-$NEWID-/")
+      NEWDISK_PATH=$(echo $OLDDISK_PATH | sed "s/-$OLDID-/-$NEWID-/")
 
-		test $(grep subvol $OLDID.conf| wc -l) -ge 2 && MULTIMOUNTS=1
+      test $(grep subvol $OLDID.conf| wc -l) -ge 2 && MULTIMOUNTS=1
 
-		test $verbose -eq 1 && echo "INFO: Stopping CT $OLDID"
+      test $verbose -eq 1 && echo "INFO: Stopping CT $OLDID"
       test $(pct status $OLDID | awk '{print $2}') == "running" && {
-		   pct stop $OLDID
+         pct stop $OLDID
       }
 
-		test $verbose -eq 1 && echo "INFO: Renaming rootfs"
-		zfs rename $OLDDISK_PATH $NEWDISK_PATH
+      test $verbose -eq 1 && echo "INFO: Renaming rootfs"
+      zfs rename $OLDDISK_PATH $NEWDISK_PATH
 
-		test $verbose -eq 1 && echo "INFO: Updating configuration"
-		sed -i "s/-$OLDID-/-$NEWID-/" $OLDID.conf 2>/dev/null
-		mv $OLDID.conf $NEWID.conf
+      test $verbose -eq 1 && echo "INFO: Updating configuration"
+      sed -i "s/-$OLDID-/-$NEWID-/" $OLDID.conf 2>/dev/null
+      mv $OLDID.conf $NEWID.conf
 
-		test $MULTIMOUNTS -eq 1 && {
-			echo "WARNING: This container has multiple mounts, please check them, not starting container"
+      test $MULTIMOUNTS -eq 1 && {
+         echo "WARNING: This container has multiple mounts, please check them, not starting container"
          canrun=0
       }
-		;;
-	*)
-		echo "Aborting..."
-		exit 1
-		;;
+      ;;
+   *)
+      echo "Aborting..."
+      exit 1
+      ;;
    esac
 }
 
