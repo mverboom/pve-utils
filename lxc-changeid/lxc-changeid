@@ -1,7 +1,6 @@
 #!/bin/bash
 #
 # lxc-changeid: change id for a given LXC container
-MULTIMOUNTS=false
 
 usage() {
    echo "Usage: lxc-changeid <options> [current] [new]"
@@ -10,9 +9,8 @@ usage() {
    echo "This script will only update the rootfs for the container."
    echo "Any extra/custom mounts have to be updated manually!"
    echo
-   echo "The container will be restarted if it's running, use -s and -n"
-   echo "to override this behaviour. A running container will be stopped and"
-   echo "started."
+   echo "The container will be started if it's possible, use -s and -n"
+   echo "to override this behaviour."
    echo
    echo "   -f       Force, do not ask for confirmation"
    echo "   -n       Do not start the container"
@@ -22,13 +20,15 @@ usage() {
 }
 
 parse_options() {
-   while getopts :fsv opt
+   while getopts :fnsv opt
    do
       case $opt in
          f) force=1
             RESPONSE=Y
          ;;
-         s) run=1
+         n) wantrun=0
+         ;;
+         s) wantrun=1
          ;;
          v) verbose=1
          ;;
@@ -66,11 +66,10 @@ change_id() {
 		NEWDISK=$(echo $OLDDISK | sed "s/-$OLDID-/-$NEWID-/")
 		NEWDISK_PATH=$(echo $OLDDISK_PATH | sed "s/-$OLDID-/-$NEWID-/")
 
-		[ $(grep subvol $OLDID.conf| wc -l) -ge 2 ] && MULTIMOUNTS=true
+		[ $(grep subvol $OLDID.conf| wc -l) -ge 2 ] && MULTIMOUNTS=1
 
 		test $verbose -eq 1 && echo "INFO: Stopping CT $OLDID"
       test $(pct status $OLDID | awk '{print $2}') == "running" && {
-         run=1
 		   pct stop $OLDID
       }
 
@@ -81,13 +80,10 @@ change_id() {
 		sed -i "s/-$OLDID-/-$NEWID-/" $OLDID.conf 2>/dev/null
 		mv $OLDID.conf $NEWID.conf
 
-		$MULTIMOUNTS && {
+		test $MULTIMOUNTS -eq 1 && {
 			echo "WARNING: This container has multiple mounts, please check them, not starting container"
-		} || {
-			test $verbose -eq 1 && echo "INFO: Starting CT $NEWID"
-			test $run -eq 1 && pct start $NEWID
-		}
-
+         canrun=0
+      }
 		;;
 	*)
 		echo "Aborting..."
@@ -99,13 +95,20 @@ change_id() {
 main() {
    force=0
    verbose=0
-   run=0
+   canrun=1
+   wantrun=1
+   MULTIMOUNTS=0
 
    parse_options "$@"
 
    check_exist
 
    change_id
+
+   test $canrun -eq 1 && test $wantrun -eq 1 && {
+      test $verbose -eq 1 && echo "INFO: Starting CT $NEWID"
+      pct start $NEWID
+   }
 }
 
 main "$@"
