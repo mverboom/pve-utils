@@ -37,7 +37,7 @@ find_name() {
    unset clause
    test $active -eq 1 && clause="and .status == \"running\""
 
-   data=$(curl -s -k -d "username=${user[$cluster]}&password=${password[$cluster]}"  https://${hostname[$cluster]}:8006/api2/json/access/ticket)
+   data=$(curl -s -k -d @<(cat <<<"username=${user[$cluster]}&password=${password[$cluster]}")  https://${hostname[$cluster]}:8006/api2/json/access/ticket)
    test "$data" = "${data/ticket/}" && { echo "Unable to login to PVE."; exit 1; }
 
    cookie=$(echo $data | jq --raw-output '.data.ticket' | sed 's/^/PVEAuthCookie=/')
