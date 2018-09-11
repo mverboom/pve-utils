@@ -3,7 +3,7 @@
 # pvefind: find vm's/containers on proxmox systems
 
 CFG=~/.pve-find.ini
-SW="jq curl"
+SW="jq curl socat xtigervncviewer awk"
 
 usage() {
    echo "Usage: pve-find <options> [name]"
@@ -13,6 +13,7 @@ usage() {
    echo "  -i      Include inactive systems."
    echo "  -v      Be more verbose."
    echo "  -c      Connect to the console of the first system found."
+   echo "  -g      Connect to the graphical console of the first VM found."
    exit 1
 }
 
@@ -75,12 +76,14 @@ sanity_check() {
 }
 
 parse_options() {
-   while getopts :icv opt
+   while getopts :igcv opt
    do
       case $opt in
          v) verbose=1
          ;;
          c) connect=1
+         ;;
+         g) graphical=1
          ;;
          i) active=0
          ;;
@@ -93,11 +96,30 @@ parse_options() {
    name=$1
 }
 
+vnc() {
+   server=$1
+   vmid=$2
+   test $verbose -eq 1 && echo "Connecting to server $server for $name..."
+
+   port=$((netstat -atn | awk '{printf "%s\n%s\n", $4, $4}' | grep -oE '[0-9]*$'; seq 32768 61000) | sort -n | uniq -u | head -n 1)
+   socat TCP-LISTEN:$port,bind=127.0.0.1 exec:"ssh $server qm vncproxy $vmid" &
+   xtigervncviewer localhost:$port
+}
+
+terminal() {
+   server=$1
+   vmid=$2
+   test $verbose -eq 1 && echo "Connecting to server $server for $name..."
+
+   ssh -t $server qm terminal $vmid
+}
+
 main() {
    unset https_proxy
    active=1
    connect=0
    verbose=0
+   graphical=0
 
    sanity_check "$@"
 
@@ -112,18 +134,19 @@ main() {
       find_name $cluster $name >> $output &
    done
    wait
-   if test $connect = 1; then
+   if test $connect -eq 1 -o $graphical -eq 1; then
+      ok=0
       read server vmid name type status < <(head -1 $output)
       case $type in
       "qemu")
-         test $verbose -eq 1 && echo "Connecting to server $server for $name..."
-         ssh -t $server qm terminal $vmid
+         test $connect -eq 1 && { ok=1; terminal $server $vmid; }
+         test $graphical -eq 1 && { ok=1; vnc $server $vmid; }
          ;;
       "lxc")
-         test $verbose -eq 1 && echo "Connecting to server $server for $name..."
-         ssh -t $server pct enter $vmid
+         test $connect -eq 1 && { ok=1; terminal $server $vmid; }
          ;;
       esac
+      test $ok -eq 0 && echo "No connection possible."
    else
       cat $output
    fi
