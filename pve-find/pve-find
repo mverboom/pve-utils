@@ -41,10 +41,12 @@ find_name() {
 
    CURL="curl -m $TIMEOUT -f -s -k"
 
+   test $verbose -eq 1 && echo "Connecting to server ${hostname[$cluster]} for $name..."
    data=$($CURL -d @<(cat <<<"username=${user[$cluster]}&password=${password[$cluster]}")  https://${hostname[$cluster]}:8006/api2/json/access/ticket)
-   test $? -eq 28 && { test $verbose -eq 1 && echo "Host ${hostname[$cluster]} timed out.."; return; }
-   test $verbose -eq 1 && echo "Connecting to server $server for $name..."
-   test "$data" = "${data/ticket/}" && { echo "Unable to login to PVE."; exit 1; }
+   ret=$?
+   test $ret -eq 7 && { test $verbose -eq 1 && echo "Host ${hostname[$cluster]} failed to connect."; exit 1; }
+   test $ret -eq 28 && { test $verbose -eq 1 && echo "Host ${hostname[$cluster]} timed out."; exit 1; }
+   test "$data" = "${data/ticket/}" && { echo "Host ${hostname[$cluster]} unable to login."; exit 1; }
 
    cookie=$(echo $data | jq --raw-output '.data.ticket' | sed 's/^/PVEAuthCookie=/')
    token=$(echo $data | jq --raw-output '.data.CSRFPreventionToken')
