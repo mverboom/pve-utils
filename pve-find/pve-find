@@ -41,22 +41,22 @@ find_name() {
 
    CURL="curl -m $TIMEOUT -f -s -k"
 
-   test $verbose -eq 1 && echo "Connecting to server ${hostname[$cluster]} for $name..."
+   test $verbose -eq 1 && echo "${hostname[$cluster]}: Connecting for $name..."
    data=$($CURL -d @<(cat <<<"username=${user[$cluster]}&password=${password[$cluster]}")  https://${hostname[$cluster]}:8006/api2/json/access/ticket)
    ret=$?
-   test $ret -eq 7 && { test $verbose -eq 1 && echo "Host ${hostname[$cluster]} failed to connect."; exit 1; }
-   test $ret -eq 28 && { test $verbose -eq 1 && echo "Host ${hostname[$cluster]} timed out."; exit 1; }
-   test "$data" = "${data/ticket/}" && { echo "Host ${hostname[$cluster]} unable to login."; exit 1; }
+   test $ret -eq 7 && { test $verbose -eq 1 && echo "${hostname[$cluster]}: Failed to connect."; exit 1; }
+   test $ret -eq 28 && { test $verbose -eq 1 && echo "${hostname[$cluster]}: Timed out."; exit 1; }
+   test "$data" = "${data/ticket/}" && { echo "${hostname[$cluster]}: Unable to login."; exit 1; }
 
    cookie=$(echo $data | jq --raw-output '.data.ticket' | sed 's/^/PVEAuthCookie=/')
    token=$(echo $data | jq --raw-output '.data.CSRFPreventionToken')
 
    CURL="$CURL -S -b $cookie"
 
-   nodes="$($CURL -H "CSRFPreventionToken: $token" https://${hostname[$cluster]}:8006/api2/json/nodes/ | jq -r ".data[] | .node")"
+   nodes="$($CURL https://${hostname[$cluster]}:8006/api2/json/nodes/ | jq -r ".data[] | .node")"
    for node in $nodes
    do
-      data="$($CURL -H "CSRFPreventionToken: $token" https://${hostname[$cluster]}:8006/api2/json/nodes/$node/lxc/) $($CURL -H "CSRFPreventionToken: $token" https://${hostname[$cluster]}:8006/api2/json/nodes/$node/qemu/)"
+      data="$($CURL https://${hostname[$cluster]}:8006/api2/json/nodes/$node/lxc/) $($CURL https://${hostname[$cluster]}:8006/api2/json/nodes/$node/qemu/)"
       echo $data | jq -r ".data[] | select((.name  | contains(\"$name\")) $clause) | \"$node \(.vmid) \(.name) \(.type // \"qemu\") \(.status)\""
    done
 }
@@ -106,7 +106,8 @@ parse_options() {
 
 vnc() {
    server=$1
-   vmid=$2
+   type=$2
+   vmid=$3
    test $verbose -eq 1 && echo "Connecting to server $server for $name..."
 
    port=$((netstat -atn | awk '{printf "%s\n%s\n", $4, $4}' | grep -oE '[0-9]*$'; seq 32768 61000) | sort -n | uniq -u | head -n 1)
@@ -148,7 +149,7 @@ main() {
       case $type in
       "qemu")
          test $connect -eq 1 && { ok=1; terminal $server $vmid; }
-         test $graphical -eq 1 && { ok=1; vnc $server $vmid; }
+         test $graphical -eq 1 && { ok=1; vnc $server $type $vmid; }
          ;;
       "lxc")
          test $connect -eq 1 && { ok=1; terminal $server $vmid; }
