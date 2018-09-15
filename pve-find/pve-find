@@ -4,6 +4,7 @@
 
 CFG=~/.pve-find.ini
 SW="jq curl socat xtigervncviewer awk"
+TIMEOUT=1
 
 usage() {
    echo "Usage: pve-find <options> [name]"
@@ -28,7 +29,7 @@ parse_config() {
       then
           declare -g -A "$var[$section]=$val"
       fi
-   done < $CFG
+   done < <(grep -v "^#" $CFG)
 }
 
 find_name() {
@@ -38,12 +39,17 @@ find_name() {
    unset clause
    test $active -eq 1 && clause="and .status == \"running\""
 
-   data=$(curl -s -k -d @<(cat <<<"username=${user[$cluster]}&password=${password[$cluster]}")  https://${hostname[$cluster]}:8006/api2/json/access/ticket)
+   CURL="curl -m $TIMEOUT -f -s -k"
+
+   data=$($CURL -d @<(cat <<<"username=${user[$cluster]}&password=${password[$cluster]}")  https://${hostname[$cluster]}:8006/api2/json/access/ticket)
+   test $? -eq 28 && { test $verbose -eq 1 && echo "Host ${hostname[$cluster]} timed out.."; return; }
+   test $verbose -eq 1 && echo "Connecting to server $server for $name..."
    test "$data" = "${data/ticket/}" && { echo "Unable to login to PVE."; exit 1; }
 
    cookie=$(echo $data | jq --raw-output '.data.ticket' | sed 's/^/PVEAuthCookie=/')
    token=$(echo $data | jq --raw-output '.data.CSRFPreventionToken')
-   CURL="curl -f -s -S -k -b $cookie"
+
+   CURL="$CURL -S -b $cookie"
 
    nodes="$($CURL -H "CSRFPreventionToken: $token" https://${hostname[$cluster]}:8006/api2/json/nodes/ | jq -r ".data[] | .node")"
    for node in $nodes
