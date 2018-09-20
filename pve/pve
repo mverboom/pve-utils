@@ -1,0 +1,164 @@
+#!/bin/bash
+#
+# pve: commandline Proxmox Virtual Environment interface
+
+CFG=~/.pve-find.ini
+SW="jq curl socat xtigervncviewer awk"
+TIMEOUT=1
+
+usage() {
+   echo "Usage: pve <options> command"
+   echo "Runs command over multiple nodes/clusters on containers and VM's."
+   echo
+   #echo "  -i      Include inactive systems."
+   #echo "  -v      Be more verbose."
+   #echo "  -c      Connect to the console of the first system found."
+   #echo "  -g      Connect to the graphical console of the first VM found."
+   exit 1
+}
+
+parse_config() {
+
+   while IFS='= ' read var val
+   do
+      if [[ $var == \[*] ]]
+      then
+          section=${var:1:-1}
+      elif [[ $val ]]
+      then
+          declare -g -A "$var[$section]=$val"
+      fi
+   done < <(grep -v "^#" $CFG)
+}
+
+find_name() {
+   cluster=$1
+   name=$2
+
+   unset clause
+   test $active -eq 1 && clause="and .status == \"running\""
+
+   CURL="curl -m $TIMEOUT -f -s -k"
+
+   test $verbose -eq 1 && echo "${hostname[$cluster]}: Connecting for $name..."
+   data=$($CURL -d @<(cat <<<"username=${user[$cluster]}&password=${password[$cluster]}")  https://${hostname[$cluster]}:8006/api2/json/access/ticket)
+   ret=$?
+   test $ret -eq 7 && { test $verbose -eq 1 && echo "${hostname[$cluster]}: Failed to connect."; exit 1; }
+   test $ret -eq 28 && { test $verbose -eq 1 && echo "${hostname[$cluster]}: Timed out."; exit 1; }
+   test "$data" = "${data/ticket/}" && { echo "${hostname[$cluster]}: Unable to login."; exit 1; }
+
+   cookie=$(echo $data | jq --raw-output '.data.ticket' | sed 's/^/PVEAuthCookie=/')
+   token=$(echo $data | jq --raw-output '.data.CSRFPreventionToken')
+
+   CURL="$CURL -S -b $cookie"
+
+   nodes="$($CURL https://${hostname[$cluster]}:8006/api2/json/nodes/ | jq -r ".data[] | .node")"
+   for node in $nodes
+   do
+      data="$($CURL https://${hostname[$cluster]}:8006/api2/json/nodes/$node/lxc/) $($CURL https://${hostname[$cluster]}:8006/api2/json/nodes/$node/qemu/)"
+      echo $data | jq -r ".data[] | select((.name  | contains(\"$name\")) $clause) | \"$node \(.vmid) \(.name) \(.type // \"qemu\") \(.status)\""
+   done
+}
+
+sanity_check() {
+   err=0
+
+   ! test -f $CFG && { echo "No config file found ($CFG)."; err=1; }
+
+   test $err -eq 0 && test $(stat -c %a $CFG) -gt 600 && { echo "Unsafe permissions on config file."; err=1; }
+
+   for name in $SW
+   do
+      if ! which $name > /dev/null 2>&1
+      then
+         missing="$missing $name"
+         err=1
+      fi
+   done
+   test "$missing" != "" && echo "Missing required software to run script:$missing"
+
+   test $# -lt 1 && { echo "At least one argument required."; err=1; }
+
+   test $err -ne 0 && usage
+}
+
+parse_options() {
+   while getopts :igcv opt
+   do
+      case $opt in
+         v) verbose=1
+         ;;
+         c) connect=1
+         ;;
+         g) graphical=1
+         ;;
+         i) active=0
+         ;;
+         \?) echo "Unknowing options: -$OPTARG"
+             usage
+         ;;
+      esac
+   done
+   shift $((OPTIND -1))
+   name=$1
+}
+
+vnc() {
+   server=$1
+   type=$2
+   vmid=$3
+   test $verbose -eq 1 && echo "Connecting to server $server for $name..."
+
+   port=$((netstat -atn | awk '{printf "%s\n%s\n", $4, $4}' | grep -oE '[0-9]*$'; seq 32768 61000) | sort -n | uniq -u | head -n 1)
+   socat TCP-LISTEN:$port,bind=127.0.0.1 exec:"ssh root@$server qm vncproxy $vmid" &
+   xtigervncviewer localhost:$port
+}
+
+terminal() {
+   server=$1
+   vmid=$2
+   test $verbose -eq 1 && echo "Connecting to server $server for $name..."
+
+   ssh -t $server qm terminal $vmid
+}
+
+main() {
+   unset https_proxy
+   active=1
+   connect=0
+   verbose=0
+   graphical=0
+
+   sanity_check "$@"
+
+   parse_config
+
+   parse_options "$@"
+
+   output=$(tempfile)
+
+   for cluster in ${!hostname[*]}
+   do
+      find_name $cluster $name >> $output &
+   done
+   wait
+   if test $connect -eq 1 -o $graphical -eq 1; then
+      ok=0
+      read server vmid name type status < <(head -1 $output)
+      case $type in
+      "qemu")
+         test $connect -eq 1 && { ok=1; terminal $server $vmid; }
+         test $graphical -eq 1 && { ok=1; vnc $server $type $vmid; }
+         ;;
+      "lxc")
+         test $connect -eq 1 && { ok=1; terminal $server $vmid; }
+         ;;
+      esac
+      test $ok -eq 0 && echo "No connection possible."
+   else
+      cat $output
+   fi
+   rm -f $output
+}
+
+main "$@"
