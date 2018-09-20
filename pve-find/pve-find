@@ -111,7 +111,7 @@ vnc() {
    test $verbose -eq 1 && echo "Connecting to server $server for $name..."
 
    port=$((netstat -atn | awk '{printf "%s\n%s\n", $4, $4}' | grep -oE '[0-9]*$'; seq 32768 61000) | sort -n | uniq -u | head -n 1)
-   socat TCP-LISTEN:$port,bind=127.0.0.1 exec:"ssh $server qm vncproxy $vmid" &
+   socat TCP-LISTEN:$port,bind=127.0.0.1 exec:"ssh root@$server qm vncproxy $vmid" &
    xtigervncviewer localhost:$port
 }
 
