@@ -31,6 +31,29 @@ parse_config() {
    done < <(grep -v "^#" $CFG)
 }
 
+action() {
+   cluster=$1
+
+   #CURL="curl -m $TIMEOUT -f -s -k"
+   CURL="curl -f -s -k"
+
+   test $verbose -eq 1 && echo "${hostname[$cluster]}: Connecting."
+   data=$($CURL -d @<(cat <<<"username=${user[$cluster]}&password=${password[$cluster]}")  https://${hostname[$cluster]}:8006/api2/json/access/ticket)
+   ret=$?
+   test $ret -eq 7 && { test $verbose -eq 1 && echo "${hostname[$cluster]}: Failed to connect."; exit 1; }
+   test $ret -eq 28 && { test $verbose -eq 1 && echo "${hostname[$cluster]}: Timed out."; exit 1; }
+   test "$data" = "${data/ticket/}" && { echo "${hostname[$cluster]}: Unable to login."; exit 1; }
+
+   cookie=$(echo $data | jq --raw-output '.data.ticket' | sed 's/^/PVEAuthCookie=/')
+   token="CSRFPreventionToken: $(echo $data | jq --raw-output '.data.CSRFPreventionToken')"
+
+   CURL="$CURL -S -b $cookie"
+
+   # port remains open for about 10 seconds
+   curl -s -D/dev/stderr -k -H "$token" -b "$cookie" -XPOST https://${hostname[$cluster]}:8006/api2/json/nodes/avon/qemu/200/vncproxy | jq .
+   xtigervncviewer avon:5900
+}
+
 find_name() {
    cluster=$1
    name=$2
@@ -56,7 +79,10 @@ find_name() {
    for node in $nodes
    do
       data="$($CURL https://${hostname[$cluster]}:8006/api2/json/nodes/$node/lxc/) $($CURL https://${hostname[$cluster]}:8006/api2/json/nodes/$node/qemu/)"
-      echo $data | jq -r ".data[] | select((.name  | contains(\"$name\")) $clause) | \"$node \(.vmid) \(.name) \(.type // \"qemu\") \(.status)\""
+      result=$(echo $data | jq -r ".data[] | select((.name  | contains(\"$name\")) $clause) | \"$node \(.vmid) \(.name) \(.type // \"qemu\") \(.status)\"")
+      if test "$result" != ""; then
+         echo "$cluster $result"
+      fi
    done
 }
 
@@ -136,6 +162,17 @@ main() {
    parse_options "$@"
 
    output=$(tempfile)
+
+   name=$1
+   res=()
+   while read line; do
+      test "$line" != "" && res+=( "$line" )
+   done < <( for cluster in ${!hostname[*]}; do
+                find_name $cluster $name &    echo ${res[0]}
+             done )
+   echo ${#res[@]}
+   echo ${res[1]}
+   exit
 
    for cluster in ${!hostname[*]}
    do
