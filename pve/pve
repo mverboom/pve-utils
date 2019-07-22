@@ -35,7 +35,7 @@ action() {
    cluster=$1
 
    #CURL="curl -m $TIMEOUT -f -s -k"
-   CURL="curl -f -s -k"
+   CURL="curl  -f -s -k"
 
    test $verbose -eq 1 && echo "${hostname[$cluster]}: Connecting."
    data=$($CURL -d @<(cat <<<"username=${user[$cluster]}&password=${password[$cluster]}")  https://${hostname[$cluster]}:8006/api2/json/access/ticket)
@@ -54,6 +54,12 @@ action() {
    xtigervncviewer avon:5900
 }
 
+message() {
+   local level=$1
+   local msg="$2"
+   ( >&2 echo "$msg" ) > /dev/null 
+}
+
 find_name() {
    cluster=$1
    name=$2
@@ -63,12 +69,12 @@ find_name() {
 
    CURL="curl -m $TIMEOUT -f -s -k"
 
-   test $verbose -eq 1 && echo "${hostname[$cluster]}: Connecting for $name..."
-   data=$($CURL -d @<(cat <<<"username=${user[$cluster]}&password=${password[$cluster]}")  https://${hostname[$cluster]}:8006/api2/json/access/ticket)
+   test $verbose -eq 1 && message 1 "${hostname[$cluster]}: Connecting for $name..."
+   data=$($CURL -d @<(cat <<<"username=${user[$cluster]}&password=${password[$cluster]}")  https://${hostname[$cluster]}:8006/api2/json/access/ticket 2> /dev/null)
    ret=$?
-   test $ret -eq 7 && { test $verbose -eq 1 && echo "${hostname[$cluster]}: Failed to connect."; exit 1; }
-   test $ret -eq 28 && { test $verbose -eq 1 && echo "${hostname[$cluster]}: Timed out."; exit 1; }
-   test "$data" = "${data/ticket/}" && { echo "${hostname[$cluster]}: Unable to login."; exit 1; }
+   test $ret -eq 7 && { test $verbose -eq 1 && message 2 "${hostname[$cluster]}: Failed to connect."; exit 1; }
+   test $ret -eq 28 && { test $verbose -eq 1 && message 2 "${hostname[$cluster]}: Timed out."; exit 1; }
+   test "$data" = "${data/ticket/}" && { message 2 "${hostname[$cluster]}: Unable to login."; exit 1; }
 
    cookie=$(echo $data | jq --raw-output '.data.ticket' | sed 's/^/PVEAuthCookie=/')
    token=$(echo $data | jq --raw-output '.data.CSRFPreventionToken')
@@ -148,6 +154,38 @@ terminal() {
    ssh -t $server qm terminal $vmid
 }
 
+clus_find_name() {
+   local line
+   local cluster
+   local ret
+
+   result=()
+   while read line; do
+      if test "${line:0:1}" = "#"; then
+         ret=( ${line:1} )
+      else if test "$line" != ""; then
+            result+=( "$line" )
+         fi
+      fi
+   done < <( for cluster in ${!hostname[*]}; do
+                find_name $cluster $name & 
+                pids+=( $! )
+             done 
+             ret=0
+             for pid in ${pids[*]}; do
+                wait $pid
+                ret=$(( ret + $? ))
+             done
+             echo "#$ret"
+           )
+   return $ret
+}
+
+vm_stop() {
+   echo $1
+
+}
+
 main() {
    unset https_proxy
    active=1
@@ -163,15 +201,11 @@ main() {
 
    output=$(tempfile)
 
-   name=$1
-   res=()
-   while read line; do
-      test "$line" != "" && res+=( "$line" )
-   done < <( for cluster in ${!hostname[*]}; do
-                find_name $cluster $name &    echo ${res[0]}
-             done )
-   echo ${#res[@]}
-   echo ${res[1]}
+   clus_find_name "$name" #|| { echo "Error searching $name in cluster."; exit 1; }
+
+   test "${#result[*]}" = 0 && { echo "No matches found."; exit 1; }
+   test "${#result[*]}" -gt 1 && { echo "More then one match found."; exit 1; }
+   echo vm_stop ${result[0]}
    exit
 
    for cluster in ${!hostname[*]}
