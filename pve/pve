@@ -4,7 +4,51 @@
 
 CFG=~/.pve-find.ini
 SW="jq curl socat xtigervncviewer awk"
+CACHE=~/.pve-cache
+
+declare -A COOKIE
+declare -A TOKEN
 TIMEOUT=1
+# Login session time cache
+SESSION=60
+
+# CURL <cluster> "extra args"
+CURL() {
+# cookie/token cache op file maken?
+   local CMD; local data; local cookie; local token; local cache
+   CMD="curl -m $TIMEOUT --fail --silent --insecure -D/dev/null"
+
+   local cluster="$1"
+   shift
+
+   if test -e "$CACHE" && grep "^$cluster " "$CACHE" > /dev/null; then
+      message 2 "$cluster: Login cookie in cache."
+      cache=$(grep "^$cluster " "$CACHE")
+      age=$(echo "$cache" | cut -d' ' -f 2)
+      if test $(( $(date "+%s") - age )) -lt "$SESSION"; then
+         message 2 "$cluster: Already logged in."
+         cookie="${cache/* /}"
+         token="${cache/ */}"
+      else
+         message 2 "$cluster: Cache invalid."
+         sed -i "/^$cluster /d" "$CACHE"
+      fi
+   fi
+
+   if test "$cookie" = ""; then
+      message 1 "$cluster: Logging in."
+      data=$($CMD -d @<(cat <<<"username=${user[$cluster]}&password=${password[$cluster]}")  https://${hostname[$cluster]}:8006/api2/json/access/ticket 2> /dev/null)
+      ret=$?
+      test $ret -eq 7 && { message -1 "${hostname[$cluster]}: Failed to connect."; exit 1; }
+      test $ret -eq 28 && { message -1 "${hostname[$cluster]}: Timed out."; exit 1; }
+      test "$data" = "${data/ticket/}" && { message -1 "${hostname[$cluster]}: Unable to login."; exit 1; }
+      cookie=$(echo $data | jq --raw-output '.data.ticket' | sed 's/^/PVEAuthCookie=/')
+      token=$(echo $data | jq --raw-output '.data.CSRFPreventionToken')
+      echo "$cluster $(date '+%s') $token $cookie" >> "$CACHE"
+   fi
+   $CMD --header "CSRFPreventionToken:$token" --cookie "$cookie" https://${hostname[$cluster]}:8006/api2/json/$*
+   return $?
+}
 
 usage() {
    echo "Usage: pve <options> command"
@@ -18,7 +62,6 @@ usage() {
 }
 
 parse_config() {
-
    while IFS='= ' read var val
    do
       if [[ $var == \[*] ]]
@@ -57,7 +100,11 @@ action() {
 message() {
    local level=$1
    local msg="$2"
-   ( >&2 echo "$msg" ) > /dev/null 
+   if test "$level" -lt 0; then
+      ( >&2 echo "$msg" ) > /dev/null 
+   else
+      test "$verbose" -ge "$level" && ( >&2 echo "$msg" ) > /dev/null 
+   fi
 }
 
 find_name() {
@@ -67,24 +114,26 @@ find_name() {
    unset clause
    test $active -eq 1 && clause="and .status == \"running\""
 
-   CURL="curl -m $TIMEOUT -f -s -k"
+   #CURL="curl -m $TIMEOUT -f -s -k"
 
-   test $verbose -eq 1 && message 1 "${hostname[$cluster]}: Connecting for $name..."
-   data=$($CURL -d @<(cat <<<"username=${user[$cluster]}&password=${password[$cluster]}")  https://${hostname[$cluster]}:8006/api2/json/access/ticket 2> /dev/null)
-   ret=$?
-   test $ret -eq 7 && { test $verbose -eq 1 && message 2 "${hostname[$cluster]}: Failed to connect."; exit 1; }
-   test $ret -eq 28 && { test $verbose -eq 1 && message 2 "${hostname[$cluster]}: Timed out."; exit 1; }
-   test "$data" = "${data/ticket/}" && { message 2 "${hostname[$cluster]}: Unable to login."; exit 1; }
+   #message 2 "${hostname[$cluster]}: Connecting for $name..."
+   #data=$($CURL -d @<(cat <<<"username=${user[$cluster]}&password=${password[$cluster]}")  https://${hostname[$cluster]}:8006/api2/json/access/ticket 2> /dev/null)
+   #ret=$?
+   #test $ret -eq 7 && { message 2 "${hostname[$cluster]}: Failed to connect."; exit 1; }
+   #test $ret -eq 28 && { message 2 "${hostname[$cluster]}: Timed out."; exit 1; }
+   #test "$data" = "${data/ticket/}" && { message 2 "${hostname[$cluster]}: Unable to login."; exit 1; }
 
-   cookie=$(echo $data | jq --raw-output '.data.ticket' | sed 's/^/PVEAuthCookie=/')
-   token=$(echo $data | jq --raw-output '.data.CSRFPreventionToken')
+   #cookie=$(echo $data | jq --raw-output '.data.ticket' | sed 's/^/PVEAuthCookie=/')
+   #token=$(echo $data | jq --raw-output '.data.CSRFPreventionToken')
 
-   CURL="$CURL -S -b $cookie"
+   #CURL="$CURL -S -b $cookie"
 
-   nodes="$($CURL https://${hostname[$cluster]}:8006/api2/json/nodes/ | jq -r ".data[] | .node")"
+   #nodes="$($CURL https://${hostname[$cluster]}:8006/api2/json/nodes/ | jq -r ".data[] | .node")"
+   nodes=$(CURL $cluster nodes/ | jq -r ".data[] | .node")
    for node in $nodes
    do
-      data="$($CURL https://${hostname[$cluster]}:8006/api2/json/nodes/$node/lxc/) $($CURL https://${hostname[$cluster]}:8006/api2/json/nodes/$node/qemu/)"
+      #data="$($CURL https://${hostname[$cluster]}:8006/api2/json/nodes/$node/lxc/) $($CURL https://${hostname[$cluster]}:8006/api2/json/nodes/$node/qemu/)"
+      data="$(CURL $cluster nodes/$node/lxc/) $(CURL $cluster nodes/$node/qemu/)"
       result=$(echo $data | jq -r ".data[] | select((.name  | contains(\"$name\")) $clause) | \"$node \(.vmid) \(.name) \(.type // \"qemu\") \(.status)\"")
       if test "$result" != ""; then
          echo "$cluster $result"
@@ -115,16 +164,18 @@ sanity_check() {
 }
 
 parse_options() {
-   while getopts :igcv opt
+   while getopts :igcvx opt
    do
       case $opt in
-         v) verbose=1
+         v) verbose=$(( verbose + 1 ))
          ;;
          c) connect=1
          ;;
          g) graphical=1
          ;;
          i) active=0
+         ;;
+         x) set -x
          ;;
          \?) echo "Unknowing options: -$OPTARG"
              usage
@@ -181,10 +232,16 @@ clus_find_name() {
    return $ret
 }
 
-vm_stop() {
-   echo $1
+vm_shutdown() {
+   vmname="$1"
 
+   #find_name lnw $vmname
+   clus_find_name "$vmname"
+   test "${#result[*]}" = 0 && { echo "No matches found."; exit 1; }
+   test "${#result[*]}" -gt 1 && { echo "More then one match found."; exit 1; }
+   echo ${result[0]}
 }
+
 
 main() {
    unset https_proxy
@@ -201,6 +258,18 @@ main() {
 
    output=$(tempfile)
 
+   vm_shutdown $name
+   exit
+   CURL lnw nodes/localhost/version
+   echo "Return: $?"
+
+   CURL lnw nodes/localhost/lxc/110/status/current | jq .
+   echo "Return: $?"
+
+   CURL lnw nodes/localhost/lxc/110/status/start -XPOST
+   echo "Return: $?"
+
+   exit
    clus_find_name "$name" #|| { echo "Error searching $name in cluster."; exit 1; }
 
    test "${#result[*]}" = 0 && { echo "No matches found."; exit 1; }
