@@ -11,27 +11,31 @@ declare -A TOKEN
 TIMEOUT=1
 # Login session time cache
 SESSION=60
+# Named indices for found information on vm
+readonly R_CLUS=0 R_HOST=1 R_ID=2 R_VM=3 R_TYPE=4 R_STATE=5
 
 # CURL <cluster> "extra args"
 CURL() {
-# cookie/token cache op file maken?
-   local CMD; local data; local cookie; local token; local cache
-   CMD="curl -m $TIMEOUT --fail --silent --insecure -D/dev/null"
+   local CMD; local data; local cookie; local token; local cache; local age
+   local now; local cluster; local ret
+   #CMD="curl -m $TIMEOUT --fail --silent --insecure -D/dev/null"
+   CMD="curl --fail --silent --insecure -D/dev/null"
 
    local cluster="$1"
    shift
 
-   if test -e "$CACHE" && grep "^$cluster " "$CACHE" > /dev/null; then
+   if test -e "$CACHE" && grep "^$cluster"$'\t' "$CACHE" > /dev/null; then
       message 2 "$cluster: Login cookie in cache."
-      cache=$(grep "^$cluster " "$CACHE")
-      age=$(echo "$cache" | cut -d' ' -f 2)
-      if test $(( $(date "+%s") - age )) -lt "$SESSION"; then
+      now=$(date "+%s")
+      cache=$(grep "^$cluster"$'\t' "$CACHE")
+      age=$(echo "$cache" | cut -d$'\t' -f 2)
+      if test "$(( now - age ))" -lt "$SESSION"; then
          message 2 "$cluster: Already logged in."
-         cookie="${cache/* /}"
-         token="${cache/ */}"
+         token="$(echo $cache | cut -d$'\t' -f 3)"
+         cookie="$(echo $cache | cut -d$'\t' -f 4- )"
       else
+         sed -i "/^$cluster\t/d" "$CACHE"
          message 2 "$cluster: Cache invalid."
-         sed -i "/^$cluster /d" "$CACHE"
       fi
    fi
 
@@ -44,7 +48,7 @@ CURL() {
       test "$data" = "${data/ticket/}" && { message -1 "${hostname[$cluster]}: Unable to login."; exit 1; }
       cookie=$(echo $data | jq --raw-output '.data.ticket' | sed 's/^/PVEAuthCookie=/')
       token=$(echo $data | jq --raw-output '.data.CSRFPreventionToken')
-      echo "$cluster $(date '+%s') $token $cookie" >> "$CACHE"
+      echo -e "$cluster\t$(date '+%s')\t$token\t$cookie" >> "$CACHE"
    fi
    $CMD --header "CSRFPreventionToken:$token" --cookie "$cookie" https://${hostname[$cluster]}:8006/api2/json/$*
    return $?
@@ -55,7 +59,8 @@ usage() {
    echo "Runs command over multiple nodes/clusters on containers and VM's."
    echo
    #echo "  -i      Include inactive systems."
-   #echo "  -v      Be more verbose."
+   #echo "  -v      Be more verbose (increase every time option is used)."
+   #echo "  -x      Debug mode enable."
    #echo "  -c      Connect to the console of the first system found."
    #echo "  -g      Connect to the graphical console of the first VM found."
    exit 1
@@ -110,29 +115,14 @@ message() {
 find_name() {
    cluster=$1
    name=$2
+   local nodes; local node; local data; local result
 
    unset clause
-   test $active -eq 1 && clause="and .status == \"running\""
+   #test $active -eq 1 && clause="and .status == \"running\""
 
-   #CURL="curl -m $TIMEOUT -f -s -k"
-
-   #message 2 "${hostname[$cluster]}: Connecting for $name..."
-   #data=$($CURL -d @<(cat <<<"username=${user[$cluster]}&password=${password[$cluster]}")  https://${hostname[$cluster]}:8006/api2/json/access/ticket 2> /dev/null)
-   #ret=$?
-   #test $ret -eq 7 && { message 2 "${hostname[$cluster]}: Failed to connect."; exit 1; }
-   #test $ret -eq 28 && { message 2 "${hostname[$cluster]}: Timed out."; exit 1; }
-   #test "$data" = "${data/ticket/}" && { message 2 "${hostname[$cluster]}: Unable to login."; exit 1; }
-
-   #cookie=$(echo $data | jq --raw-output '.data.ticket' | sed 's/^/PVEAuthCookie=/')
-   #token=$(echo $data | jq --raw-output '.data.CSRFPreventionToken')
-
-   #CURL="$CURL -S -b $cookie"
-
-   #nodes="$($CURL https://${hostname[$cluster]}:8006/api2/json/nodes/ | jq -r ".data[] | .node")"
    nodes=$(CURL $cluster nodes/ | jq -r ".data[] | .node")
    for node in $nodes
    do
-      #data="$($CURL https://${hostname[$cluster]}:8006/api2/json/nodes/$node/lxc/) $($CURL https://${hostname[$cluster]}:8006/api2/json/nodes/$node/qemu/)"
       data="$(CURL $cluster nodes/$node/lxc/) $(CURL $cluster nodes/$node/qemu/)"
       result=$(echo $data | jq -r ".data[] | select((.name  | contains(\"$name\")) $clause) | \"$node \(.vmid) \(.name) \(.type // \"qemu\") \(.status)\"")
       if test "$result" != ""; then
@@ -183,7 +173,8 @@ parse_options() {
       esac
    done
    shift $((OPTIND -1))
-   name=$1
+   cmd="$1"
+   name="$2"
 }
 
 vnc() {
@@ -195,14 +186,6 @@ vnc() {
    port=$((netstat -atn | awk '{printf "%s\n%s\n", $4, $4}' | grep -oE '[0-9]*$'; seq 32768 61000) | sort -n | uniq -u | head -n 1)
    socat TCP-LISTEN:$port,bind=127.0.0.1 exec:"ssh root@$server qm vncproxy $vmid" &
    xtigervncviewer localhost:$port
-}
-
-terminal() {
-   server=$1
-   vmid=$2
-   test $verbose -eq 1 && echo "Connecting to server $server for $name..."
-
-   ssh -t $server qm terminal $vmid
 }
 
 clus_find_name() {
@@ -232,73 +215,83 @@ clus_find_name() {
    return $ret
 }
 
-vm_shutdown() {
-   vmname="$1"
+vm_status() {
+   local action="$1"
+   local vmname="$2"
 
-   #find_name lnw $vmname
    clus_find_name "$vmname"
    test "${#result[*]}" = 0 && { echo "No matches found."; exit 1; }
-   test "${#result[*]}" -gt 1 && { echo "More then one match found."; exit 1; }
-   echo ${result[0]}
+   test "${#result[*]}" -gt 1 && { echo "More than one match found."; exit 1; }
+   res=( ${result[0]} )
+   CURL ${res[$R_CLUS]} nodes/${res[$R_HOST]}/${res[$R_TYPE]}/${res[$R_ID]}/status/$action -XPOST > /dev/null
+   test "$?" -ne "0" && message -1 "Unable to $action $vmname"
 }
 
+# Try and see if we can open a websocket and use it as a terminal
+#
+# https://git.proxmox.com/?p=pve-xtermjs.git;a=blob;f=src/www/main.js;h=62ec1c1846dc2cccd39ae3cbe5f7345ac74e58ed;hb=refs/heads/master
+# https://gist.github.com/htp/fbce19069187ec1cc486b594104f01d0
+#
+# socketURL = protocol + location.hostname + ((location.port) ? (':' + location.port) : '') + '/api2/json' + url + '/vncwebsocket?port=' + port + '&vncticket=' + encodeURIComponent(ticket);
+#
+vm_terminal() {
+   local vmname="$1"
+
+   clus_find_name "$vmname"
+   test "${#result[*]}" = 0 && { echo "No matches found."; exit 1; }
+   test "${#result[*]}" -gt 1 && { echo "More than one match found."; exit 1; }
+   res=( ${result[0]} )
+   data="$(CURL ${res[$R_CLUS]} nodes/${res[$R_HOST]}/${res[$R_TYPE]}/${res[$R_ID]}/termproxy -XPOST)"
+   port=$(echo $data | jq --raw-output .data.port)
+   ticket=$(echo $data | jq --raw-output .data.ticket)
+
+   cache=$(grep "^lnw " "$CACHE")
+   token="$(echo $cache | cut -d ' ' -f 3)"
+   cookie="$(echo $cache | cut -d ' ' -f 4-)"
+
+   # Protocol: base64
+   # /usr/bin/perl /usr/bin/termproxy 5900 --path /vms/110 --perm VM.Console -- /usr/bin/dtach -A /var/run/dtach/vzctlconsole110 -r winch -z lxc-console -n 110 -e -1
+   # Protocol: binary
+   # /usr/bin/perl /usr/bin/termproxy 5900 --path /vms/110 --perm VM.Console -- /usr/bin/dtach -A /var/run/dtach/vzctlconsole110 -r winch -z lxc-console -n 110 -e -1
+   # Geeft console: /usr/bin/dtach -A /var/run/dtach/vzctlconsole110 -r winch -z lxc-console -n 110 -e -1
+
+   curl --get --include --no-buffer --insecure -H "Connection: Upgrade" -H "Upgrade: websocket" -H "Sec-WebSocket-Version: 13" -H "Sec-WebSocket-Protocol: base64" -H "Sec-WebSocket-Key: test" --header "CSRFPreventionToken:$token" --cookie "$cookie" "https://avon.lnw.verboom.net:8006/api2/json/nodes/${res[$R_HOST]}/${res[$R_TYPE]}/${res[$R_ID]}/vncwebsocket" --data-urlencode "port=$port" --data-urlencode "vncticket=$ticket"
+}
+
+vm_stat() {
+   local vmname="$1"
+
+   clus_find_name "$vmname"
+   #find_name "lnw" "$vmname"
+   test "${#result[*]}" = 0 && { echo "No matches found."; exit 1; }
+   test "${#result[*]}" -gt 1 && { echo "More than one match found."; exit 1; }
+   res=( ${result[0]} )
+   CURL ${res[$R_CLUS]} nodes/${res[$R_HOST]}/${res[$R_TYPE]}/${res[$R_ID]}/status/current | jq .
+   test "$?" -ne "0" && message -1 "Unable to $action $vmname"
+}
 
 main() {
    unset https_proxy
-   active=1
-   connect=0
    verbose=0
    graphical=0
 
    sanity_check "$@"
-
    parse_config
-
    parse_options "$@"
 
-   output=$(tempfile)
-
-   vm_shutdown $name
-   exit
-   CURL lnw nodes/localhost/version
-   echo "Return: $?"
-
-   CURL lnw nodes/localhost/lxc/110/status/current | jq .
-   echo "Return: $?"
-
-   CURL lnw nodes/localhost/lxc/110/status/start -XPOST
-   echo "Return: $?"
-
-   exit
-   clus_find_name "$name" #|| { echo "Error searching $name in cluster."; exit 1; }
-
-   test "${#result[*]}" = 0 && { echo "No matches found."; exit 1; }
-   test "${#result[*]}" -gt 1 && { echo "More then one match found."; exit 1; }
-   echo vm_stop ${result[0]}
-   exit
-
-   for cluster in ${!hostname[*]}
-   do
-      find_name $cluster $name >> $output &
-   done
-   wait
-   if test $connect -eq 1 -o $graphical -eq 1; then
-      ok=0
-      read server vmid name type status < <(head -1 $output)
-      case $type in
-      "qemu")
-         test $connect -eq 1 && { ok=1; terminal $server $vmid; }
-         test $graphical -eq 1 && { ok=1; vnc $server $type $vmid; }
-         ;;
-      "lxc")
-         test $connect -eq 1 && { ok=1; terminal $server $vmid; }
-         ;;
-      esac
-      test $ok -eq 0 && echo "No connection possible."
-   else
-      cat $output
-   fi
-   rm -f $output
+   case "$cmd" in
+      "start"|"shutdown"|"stop"|"suspend"|"resume")
+         vm_status "$cmd" "$name"
+      ;;
+      "status")
+         vm_stat "$name"
+      ;;
+      "term")
+         vm_terminal "$name"
+      ;;
+      *) usage
+      ;;
+   esac
 }
 
 main "$@"
