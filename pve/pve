@@ -10,32 +10,35 @@ declare -A COOKIE
 declare -A TOKEN
 TIMEOUT=1
 # Login session time cache
-SESSION=60
+SESSION=2
 # Named indices for found information on vm
 readonly R_CLUS=0 R_HOST=1 R_ID=2 R_VM=3 R_TYPE=4 R_STATE=5
 
 # CURL <cluster> "extra args"
 CURL() {
    local CMD; local data; local cookie; local token; local cache; local age
+   local age
    local now; local cluster; local ret
    #CMD="curl -m $TIMEOUT --fail --silent --insecure -D/dev/null"
-   CMD="curl --fail --silent --insecure -D/dev/null"
+   CMD="curl --fail --insecure -D/dev/null"
+   test "$verbose" -eq 0 && CMD="$CMD --silent"
 
    local cluster="$1"
    shift
 
-   if test -e "$CACHE" && grep "^$cluster"$'\t' "$CACHE" > /dev/null; then
+   test -e "$CACHE" && cache="$(grep -m 1 ^$cluster$'\t' $CACHE)"
+   if test "$cache" != ""; then
       message 2 "$cluster: Login cookie in cache."
       now=$(date "+%s")
-      cache=$(grep "^$cluster"$'\t' "$CACHE")
       age=$(echo "$cache" | cut -d$'\t' -f 2)
+      #message 1 "$cluster: ${now}_ _${age}_"
       if test "$(( now - age ))" -lt "$SESSION"; then
          message 2 "$cluster: Already logged in."
-         token="$(echo $cache | cut -d$'\t' -f 3)"
-         cookie="$(echo $cache | cut -d$'\t' -f 4- )"
+         token="$(echo "$cache" | cut -d$'\t' -f 3)"
+         cookie="$(echo "$cache" | cut -d$'\t' -f 4- )"
       else
-         sed -i "/^$cluster\t/d" "$CACHE"
-         message 2 "$cluster: Cache invalid."
+         flock -x -w 2 "$CACHE" sed -i "/^$cluster\t/d" "$CACHE"
+         message 1 "$cluster: Cache invalid."
       fi
    fi
 
@@ -48,7 +51,7 @@ CURL() {
       test "$data" = "${data/ticket/}" && { message -1 "${hostname[$cluster]}: Unable to login."; exit 1; }
       cookie=$(echo $data | jq --raw-output '.data.ticket' | sed 's/^/PVEAuthCookie=/')
       token=$(echo $data | jq --raw-output '.data.CSRFPreventionToken')
-      echo -e "$cluster\t$(date '+%s')\t$token\t$cookie" >> "$CACHE"
+      flock -x -w 2 "$CACHE" echo -e "$cluster\t$(date '+%s')\t$token\t$cookie" >> "$CACHE"
    fi
    $CMD --header "CSRFPreventionToken:$token" --cookie "$cookie" https://${hostname[$cluster]}:8006/api2/json/$*
    return $?
@@ -154,8 +157,7 @@ sanity_check() {
 }
 
 parse_options() {
-   while getopts :igcvx opt
-   do
+   while getopts :igcvx opt; do
       case $opt in
          v) verbose=$(( verbose + 1 ))
          ;;
@@ -172,9 +174,6 @@ parse_options() {
          ;;
       esac
    done
-   shift $((OPTIND -1))
-   cmd="$1"
-   name="$2"
 }
 
 vnc() {
@@ -258,16 +257,105 @@ vm_terminal() {
    curl --get --include --no-buffer --insecure -H "Connection: Upgrade" -H "Upgrade: websocket" -H "Sec-WebSocket-Version: 13" -H "Sec-WebSocket-Protocol: base64" -H "Sec-WebSocket-Key: test" --header "CSRFPreventionToken:$token" --cookie "$cookie" "https://avon.lnw.verboom.net:8006/api2/json/nodes/${res[$R_HOST]}/${res[$R_TYPE]}/${res[$R_ID]}/vncwebsocket" --data-urlencode "port=$port" --data-urlencode "vncticket=$ticket"
 }
 
+vm_showmultiple() {
+   for (( i = 0; i < ${#result[*]}; i++)); do
+      echo ${result[$i]}
+   done
+}
+
 vm_stat() {
    local vmname="$1"
+
+   if test "${vmname/@/}" != "$vmname"; then
+      id="${vmname/@*/}"
+      cluster="${vmname/*@/}"
+      exit
+   fi
 
    clus_find_name "$vmname"
    #find_name "lnw" "$vmname"
    test "${#result[*]}" = 0 && { echo "No matches found."; exit 1; }
-   test "${#result[*]}" -gt 1 && { echo "More than one match found."; exit 1; }
+   test "${#result[*]}" -gt 1 && { echo "More than one match found."; vm_showmultiple; exit 1; }
    res=( ${result[0]} )
-   CURL ${res[$R_CLUS]} nodes/${res[$R_HOST]}/${res[$R_TYPE]}/${res[$R_ID]}/status/current | jq .
+   CURL ${res[$R_CLUS]} nodes/${res[$R_HOST]}/${res[$R_TYPE]}/${res[$R_ID]}/status/current
    test "$?" -ne "0" && message -1 "Unable to $action $vmname"
+}
+
+# Create a container
+#
+# Requires:
+# cluster
+# network bridge + device name
+# ostemplate
+# vmid -> retrieve next from cluster properties
+ct_create() {
+   vars="unpriv boot"
+
+   vmname="$1"
+   shift
+   if test "${vmname/@/}" != "$vmname"; then
+      cluster="${vmname/*@/}"
+      vmname="${vmname/@*/}"
+   else
+      usage
+   fi
+   # Check for defaults from configuration
+   for var in $vars; do
+      tmp="$var[$cluster]"
+      if test "${!tmp}" != ""; then
+         declare "$var=${!tmp}"
+      fi
+   done
+
+   while test "$#" -ne "0"; do
+      if test "$1" != "${1/=/}"; then label="${1/=*/}"; else label="$1"; fi
+      case "$label" in
+      "tmpl")
+         tmpl="${1/*=/}"
+         tmpl="tmpl_$tmpl[$cluster]"
+         tmpl="${!tmpl}"
+         test "$tmpl" = "" && message -1 "No default template specified in configuration."
+      ;;
+      "unpriv"|"boot")
+         declare "$label=${1/*=/}"
+      ;;
+      "*")
+         usage
+      ;;
+      esac
+      shift
+   done
+   # Check if all variable are defined
+   err=0
+   for var in $vars; do
+      test "${!var}" = "" && { message 0 "Variable $var not defined."; err=1; }
+   done
+   test "$err" -gt "0" && exit 1
+
+
+   ctid=$(CURL lnw cluster/nextid | jq --raw-output .data)
+   test "$ctid" = "" && message -1 "Unable to get free id."
+   echo $tmpl
+   echo $ctid
+   exit 1
+
+   CURL lnw nodes/localhost/lxc -XPOST \
+      --data vmid=$ctid \
+      --data-urlencode ostemplate="$tmpl" \
+      --data unprivilegded="$unpriv" \
+      --data-urlencode net0="name=eth0,bridge=vmbr10" \
+      --data "rootfs=pve:4" \
+      -XPOST
+   echo $?
+}
+
+destroy() {
+   clus_find_name "$vmname"
+   test "${#result[*]}" = 0 && { echo "No matches found."; exit 1; }
+   test "${#result[*]}" -gt 1 && { echo "More than one match found."; vm_showmultiple; exit 1; }
+   res=( ${result[0]} )
+   CURL ${res[$R_CLUS]} nodes/${res[$R_HOST]}/${res[$R_TYPE]}/${res[$R_ID]} -XDELETE
+   test "$?" -ne "0" && message -1 "Unable to destroy $vmname"
 }
 
 main() {
@@ -278,16 +366,30 @@ main() {
    sanity_check "$@"
    parse_config
    parse_options "$@"
+   shift $((OPTIND -1))
+   cmd="$1"
+   name="$2"
 
    case "$cmd" in
       "start"|"shutdown"|"stop"|"suspend"|"resume")
-         vm_status "$cmd" "$name"
+         shift
+         vm_status "$@"
       ;;
       "status")
-         vm_stat "$name"
+         shift
+         vm_stat "$@"
       ;;
       "term")
-         vm_terminal "$name"
+         shift
+         vm_terminal "$@"
+      ;;
+      "createct")
+         shift
+         ct_create "$@"
+      ;;
+      "destroy")
+         shift
+         destroy "$@"
       ;;
       *) usage
       ;;
