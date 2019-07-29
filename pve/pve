@@ -10,7 +10,7 @@ declare -A COOKIE
 declare -A TOKEN
 TIMEOUT=1
 # Login session time cache
-SESSION=2
+SESSION=300
 # Named indices for found information on vm
 readonly R_CLUS=0 R_HOST=1 R_ID=2 R_VM=3 R_TYPE=4 R_STATE=5
 
@@ -284,8 +284,8 @@ vm_status() {
 }
 
 vm_stat() {
-   local int="$1"
-   local vmname="$2"
+   local vmname="$1"
+   local int="$2"
 
    if test "${vmname/@/}" != "$vmname"; then
       id="${vmname/@*/}"
@@ -299,11 +299,28 @@ vm_stat() {
    test "${#result[*]}" -gt 1 && { echo "More than one match found."; vm_showmultiple; exit 1; }
    res=( ${result[0]} )
    while test 1; do
-      CURL ${res[$R_CLUS]} "nodes/${res[$R_HOST]}/${res[$R_TYPE]}" | jq ".data[] | select(.name | contains(\"$vmname\"))"
-      # ".data[] | select((.name  | contains(\"$name\")) $clause) | \"$node \(.vmid) \(.name) \(.type // \"qemu\") \(.status)\"")
-      test "$?" -ne "0" && message -1 "Unable to get status for $vmname"
+      CURL ${res[$R_CLUS]} "nodes/${res[$R_HOST]}/${res[$R_TYPE]}" | jq -r ".data[] | select(.name | contains(\"$vmname\")) | [.cpu,.mem,.maxmem,.diskread,.diskwrite] | @tsv"
       sleep $int
-   done
+   done | awk -vLINES=$LINES 'BEGIN { LINES--; line=LINES; split("B KB MB GB TB PB EB ZB YB", v) }
+             function pp(num) {
+                s=1
+                while (num > 1024 && s < 9) {
+                   num /= 1024
+                   s++
+                }
+                return(sprintf("%6.1f%s", num, v[s]));
+             }
+
+             { if (line == LINES) {
+                  printf("  cpu  -----memory------\n");
+                  printf("   %     alloc /  max   \n");
+                  line=2;
+               }
+             }
+             { cpu=$1*100; mem=$2; memmax=$3;
+               printf("%5.1f%% %s/%s\n", cpu, pp(mem), pp(memmax));
+               line++;
+             }'
 }
 
 # Create a container
