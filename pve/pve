@@ -192,6 +192,8 @@ clus_find_name() {
    local cluster
    local ret
 
+   local vnname="$1"
+
    result=()
    while read line; do
       if test "${line:0:1}" = "#"; then
@@ -201,7 +203,7 @@ clus_find_name() {
          fi
       fi
    done < <( for cluster in ${!hostname[*]}; do
-                find_name $cluster $name & 
+                find_name $cluster $vmname & 
                 pids+=( $! )
              done 
              ret=0
@@ -263,7 +265,7 @@ vm_showmultiple() {
    done
 }
 
-vm_stat() {
+vm_status() {
    local vmname="$1"
 
    if test "${vmname/@/}" != "$vmname"; then
@@ -277,8 +279,31 @@ vm_stat() {
    test "${#result[*]}" = 0 && { echo "No matches found."; exit 1; }
    test "${#result[*]}" -gt 1 && { echo "More than one match found."; vm_showmultiple; exit 1; }
    res=( ${result[0]} )
-   CURL ${res[$R_CLUS]} nodes/${res[$R_HOST]}/${res[$R_TYPE]}/${res[$R_ID]}/status/current
-   test "$?" -ne "0" && message -1 "Unable to $action $vmname"
+   CURL ${res[$R_CLUS]} nodes/${res[$R_HOST]}/${res[$R_TYPE]}/${res[$R_ID]}/status/current | jq .
+   test "$?" -ne "0" && message -1 "Unable to get status for $vmname"
+}
+
+vm_stat() {
+   local int="$1"
+   local vmname="$2"
+
+   if test "${vmname/@/}" != "$vmname"; then
+      id="${vmname/@*/}"
+      cluster="${vmname/*@/}"
+      exit
+   fi
+
+   clus_find_name "$vmname"
+   #find_name "lnw" "$vmname"
+   test "${#result[*]}" = 0 && { echo "No matches found for $vmname."; exit 1; }
+   test "${#result[*]}" -gt 1 && { echo "More than one match found."; vm_showmultiple; exit 1; }
+   res=( ${result[0]} )
+   while test 1; do
+      CURL ${res[$R_CLUS]} "nodes/${res[$R_HOST]}/${res[$R_TYPE]}" | jq ".data[] | select(.name | contains(\"$vmname\"))"
+      # ".data[] | select((.name  | contains(\"$name\")) $clause) | \"$node \(.vmid) \(.name) \(.type // \"qemu\") \(.status)\"")
+      test "$?" -ne "0" && message -1 "Unable to get status for $vmname"
+      sleep $int
+   done
 }
 
 # Create a container
@@ -376,6 +401,10 @@ main() {
          vm_status "$@"
       ;;
       "status")
+         shift
+         vm_status "$@"
+      ;;
+      "stat")
          shift
          vm_stat "$@"
       ;;
