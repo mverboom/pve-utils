@@ -294,32 +294,72 @@ vm_stat() {
    fi
 
    clus_find_name "$vmname"
-   #find_name "lnw" "$vmname"
    test "${#result[*]}" = 0 && { echo "No matches found for $vmname."; exit 1; }
    test "${#result[*]}" -gt 1 && { echo "More than one match found."; vm_showmultiple; exit 1; }
    res=( ${result[0]} )
+
+   #CURL ${res[$R_CLUS]} "nodes/${res[$R_HOST]}/${res[$R_TYPE]}" | jq -r ".data[] | select(.name | contains(\"$vmname\"))"
+   #exit 1
    while test 1; do
-      CURL ${res[$R_CLUS]} "nodes/${res[$R_HOST]}/${res[$R_TYPE]}" | jq -r ".data[] | select(.name | contains(\"$vmname\")) | [.cpu,.mem,.maxmem,.diskread,.diskwrite] | @tsv"
+      CURL ${res[$R_CLUS]} "nodes/${res[$R_HOST]}/${res[$R_TYPE]}" | jq -r ".data[] | select(.name | contains(\"$vmname\")) | [.cpu,.mem,.maxmem,.netin,.netout,.diskread,.diskwrite] | @tsv"
       sleep $int
-   done | awk -vLINES=$LINES 'BEGIN { LINES--; line=LINES; split("B KB MB GB TB PB EB ZB YB", v) }
-             function pp(num) {
+   done | awk -vLINES=$LINES 'BEGIN { LINES--; line=LINES; 
+             split("B KB MB GB TB PB EB ZB YB", B);
+             split("b/s Kb/s Mb/s Gb/s Tb/s", bs);
+             split("B/s KB/s MB/s GB/s TB/s", Bs);
+             oldtime=systime()-1; netinold=0; netoutold=0; }
+             function ppB(num) {
                 s=1
                 while (num > 1024 && s < 9) {
                    num /= 1024
                    s++
                 }
-                return(sprintf("%6.1f%s", num, v[s]));
+                return(sprintf("%6.1f%s", num, B[s]));
+             }
+             function ppbs(num) {
+                s=1;
+                num=num*8;
+                while (num > 1024 && s < 5) {
+                   num /= 1024
+                   s++
+                }
+                return(sprintf("%6.1f%s", num, bs[s]));
+             }
+             function ppBs(num) {
+                s=1;
+                num=num;
+                while (num > 1024 && s < 5) {
+                   num /= 1024
+                   s++
+                }
+                return(sprintf("%6.1f%s", num, Bs[s]));
              }
 
+
              { if (line == LINES) {
-                  printf("  cpu  -----memory------\n");
-                  printf("   %     alloc /  max   \n");
+                  printf("  cpu  -----memory------ -------network-------\n");
+                  printf("   %     alloc /  max         in       out\n");
                   line=2;
                }
              }
-             { cpu=$1*100; mem=$2; memmax=$3;
-               printf("%5.1f%% %s/%s\n", cpu, pp(mem), pp(memmax));
+             { newtime=systime();
+               cpu=$1*100; mem=$2; memmax=$3; netin=$4; netout=$5; diskread=$6
+               diskwrite=$7
+               if (netinold == 0) netinold=netin;
+               if (netoutold == 0) netoutold=netout;
+               if (diskreadold == 0) diskreadold=diskread;
+               if (diskwriteold == 0) diskwriteold=diskwrite;
+               netins=(netin - netinold)/(newtime-oldtime);
+               netouts=(netout - netoutold)/(newtime-oldtime);
+               diskreads=(diskread - diskreadold)/(newtime-oldtime);
+               diskwrites=(diskwrite - diskwriteold)/(newtime-oldtime);
+               printf("%5.1f%% %s/%s %s %s\n", cpu, ppB(mem), ppB(memmax), ppbs(netins), ppbs(netouts));
                line++;
+               oldtime=newtime;
+               netinold=netin;
+               netoutold=netout;
+               diskreadold=diskread;
+               diskwriteold=diskwrite;
              }'
 }
 
