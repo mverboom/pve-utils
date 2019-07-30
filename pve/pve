@@ -191,7 +191,6 @@ clus_find_name() {
    local line
    local cluster
    local ret
-
    local vnname="$1"
 
    result=()
@@ -228,7 +227,7 @@ clus_find_name() {
    fi
 }
 
-vm_status() {
+vm_action() {
    local action="$1"
    local vmname="$2"
 
@@ -238,6 +237,7 @@ vm_status() {
    res=( ${result[0]} )
    CURL ${res[$R_CLUS]} nodes/${res[$R_HOST]}/${res[$R_TYPE]}/${res[$R_ID]}/status/$action -XPOST > /dev/null
    test "$?" -ne "0" && message -1 "Unable to $action $vmname"
+   return 0
 }
 
 # Try and see if we can open a websocket and use it as a terminal
@@ -262,13 +262,13 @@ vm_terminal() {
    token="$(echo $cache | cut -d ' ' -f 3)"
    cookie="$(echo $cache | cut -d ' ' -f 4-)"
 
-   # Protocol: base64
-   # /usr/bin/perl /usr/bin/termproxy 5900 --path /vms/110 --perm VM.Console -- /usr/bin/dtach -A /var/run/dtach/vzctlconsole110 -r winch -z lxc-console -n 110 -e -1
-   # Protocol: binary
-   # /usr/bin/perl /usr/bin/termproxy 5900 --path /vms/110 --perm VM.Console -- /usr/bin/dtach -A /var/run/dtach/vzctlconsole110 -r winch -z lxc-console -n 110 -e -1
-   # Geeft console: /usr/bin/dtach -A /var/run/dtach/vzctlconsole110 -r winch -z lxc-console -n 110 -e -1
-
-   curl --get --include --no-buffer --insecure -H "Connection: Upgrade" -H "Upgrade: websocket" -H "Sec-WebSocket-Version: 13" -H "Sec-WebSocket-Protocol: base64" -H "Sec-WebSocket-Key: test" --header "CSRFPreventionToken:$token" --cookie "$cookie" "https://avon.lnw.verboom.net:8006/api2/json/nodes/${res[$R_HOST]}/${res[$R_TYPE]}/${res[$R_ID]}/vncwebsocket" --data-urlencode "port=$port" --data-urlencode "vncticket=$ticket"
+   curl --get --include --no-buffer --insecure -H "Connection: Upgrade" \
+      -H "Upgrade: websocket" -H "Sec-WebSocket-Version: 13" \
+      -H "Sec-WebSocket-Protocol: base64" -H "Sec-WebSocket-Key: test" \
+      --header "CSRFPreventionToken:$token" --cookie "$cookie" \
+      "https://avon.lnw.verboom.net:8006/api2/json/nodes/${res[$R_HOST]}/${res[$R_TYPE]}/${res[$R_ID]}/vncwebsocket" \
+      --data-urlencode "port=$port" \
+      --data-urlencode "vncticket=$ticket"
 }
 
 vm_showmultiple() {
@@ -280,12 +280,6 @@ vm_showmultiple() {
 
 vm_status() {
    local vmname="$1"
-
-   if test "${vmname/@/}" != "$vmname"; then
-      id="${vmname/@*/}"
-      cluster="${vmname/*@/}"
-      exit
-   fi
 
    clus_find_name "$vmname"
    #find_name "lnw" "$vmname"
@@ -300,11 +294,7 @@ vm_stat() {
    local vmname="$1"
    local int="$2"
 
-#   if test "${vmname/@/}" != "$vmname"; then
-##      id="${vmname/@*/}"
-#      cluster="${vmname/*@/}"
-#      exit
-#   fi
+   test "$int" = "" && int=5
 
    clus_find_name "$vmname"
    test "${#result[*]}" = 0 && { echo "No matches found for $vmname."; exit 1; }
@@ -442,7 +432,7 @@ ct_create() {
    echo $?
 }
 
-destroy() {
+vm_destroy() {
    clus_find_name "$vmname"
    test "${#result[*]}" = 0 && { echo "No matches found."; exit 1; }
    test "${#result[*]}" -gt 1 && { echo "More than one match found."; vm_showmultiple; exit 1; }
@@ -465,8 +455,7 @@ main() {
 
    case "$cmd" in
       "start"|"shutdown"|"stop"|"suspend"|"resume")
-         shift
-         vm_status "$@"
+         vm_action "$@"
       ;;
       "status")
          shift
@@ -486,7 +475,7 @@ main() {
       ;;
       "destroy")
          shift
-         destroy "$@"
+         vm_destroy "$@"
       ;;
       *) usage
       ;;
