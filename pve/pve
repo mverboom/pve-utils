@@ -195,25 +195,37 @@ clus_find_name() {
    local vnname="$1"
 
    result=()
-   while read line; do
-      if test "${line:0:1}" = "#"; then
-         ret=( ${line:1} )
-      else if test "$line" != ""; then
-            result+=( "$line" )
+   # Check for id@cluster notation
+   if test "${vmname/@/}" != "$vmname"; then
+      cluster="${vmname/*@/}"
+      id="${vmname/@*/}"
+      nodes=$(CURL $cluster nodes/ | jq -r ".data[] | .node")
+      for node in $nodes; do
+         data="$(CURL $cluster nodes/$node/lxc/) $(CURL $cluster nodes/$node/qemu/)"
+         res=$(echo $data | jq -r ".data[] | select(.vmid==\"$id\") | \"$node \(.vmid) \(.name) \(.type // \"qemu\") \(.status)\"")
+         test "$res" != "" && result+=( "$cluster $res" )
+      done
+   else
+      while read line; do
+         if test "${line:0:1}" = "#"; then
+            ret=( ${line:1} )
+         else if test "$line" != ""; then
+               result+=( "$line" )
+            fi
          fi
-      fi
-   done < <( for cluster in ${!hostname[*]}; do
-                find_name $cluster $vmname & 
-                pids+=( $! )
-             done 
-             ret=0
-             for pid in ${pids[*]}; do
-                wait $pid
-                ret=$(( ret + $? ))
-             done
-             echo "#$ret"
-           )
-   return $ret
+      done < <( for cluster in ${!hostname[*]}; do
+                   find_name $cluster $vmname & 
+                   pids+=( $! )
+                done 
+                ret=0
+                for pid in ${pids[*]}; do
+                   wait $pid
+                   ret=$(( ret + $? ))
+                done
+                echo "#$ret"
+              )
+      return $ret
+   fi
 }
 
 vm_status() {
@@ -261,7 +273,8 @@ vm_terminal() {
 
 vm_showmultiple() {
    for (( i = 0; i < ${#result[*]}; i++)); do
-      echo ${result[$i]}
+      res=( ${result[$i]} )
+      echo "${res[$R_CLUS]}: ${res[$R_VM]} (${res[R_ID]})"
    done
 }
 
@@ -287,21 +300,19 @@ vm_stat() {
    local vmname="$1"
    local int="$2"
 
-   if test "${vmname/@/}" != "$vmname"; then
-      id="${vmname/@*/}"
-      cluster="${vmname/*@/}"
-      exit
-   fi
+#   if test "${vmname/@/}" != "$vmname"; then
+##      id="${vmname/@*/}"
+#      cluster="${vmname/*@/}"
+#      exit
+#   fi
 
    clus_find_name "$vmname"
    test "${#result[*]}" = 0 && { echo "No matches found for $vmname."; exit 1; }
    test "${#result[*]}" -gt 1 && { echo "More than one match found."; vm_showmultiple; exit 1; }
    res=( ${result[0]} )
 
-   #CURL ${res[$R_CLUS]} "nodes/${res[$R_HOST]}/${res[$R_TYPE]}" | jq -r ".data[] | select(.name | contains(\"$vmname\"))"
-   #exit 1
    while test 1; do
-      CURL ${res[$R_CLUS]} "nodes/${res[$R_HOST]}/${res[$R_TYPE]}" | jq -r ".data[] | select(.name | contains(\"$vmname\")) | [.cpu,.mem,.maxmem,.netin,.netout,.diskread,.diskwrite] | @tsv"
+      CURL ${res[$R_CLUS]} "nodes/${res[$R_HOST]}/${res[$R_TYPE]}" | jq -r ".data[] | select(.name | contains(\"${res[$R_VM]}\")) | [.cpu,.mem,.maxmem,.netin,.netout,.diskread,.diskwrite] | @tsv"
       sleep $int
    done | awk -vLINES=$LINES 'BEGIN { LINES--; line=LINES; 
              split("B KB MB GB TB PB EB ZB YB", B);
