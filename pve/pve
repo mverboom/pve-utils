@@ -26,6 +26,7 @@ CURL() {
    local cluster="$1"
    shift
 
+   chmod 600 "$CACHE"
    test -e "$CACHE" && cache="$(grep -m 1 ^$cluster$'\t' $CACHE)"
    if test "$cache" != ""; then
       message 2 "$cluster: Login cookie in cache."
@@ -61,11 +62,16 @@ usage() {
    echo "Usage: pve <options> command"
    echo "Runs command over multiple nodes/clusters on containers and VM's."
    echo
-   #echo "  -i      Include inactive systems."
-   #echo "  -v      Be more verbose (increase every time option is used)."
-   #echo "  -x      Debug mode enable."
-   #echo "  -c      Connect to the console of the first system found."
-   #echo "  -g      Connect to the graphical console of the first VM found."
+   echo "  -v      Be more verbose (increase every time option is used)."
+   echo "  -x      Debug mode enable."
+   echo
+   echo "  status <vm name>|<vmid>@cluster           Shows status of vm."
+   echo "  start <vm name>|<vmid>@cluster            Start vm."
+   echo "  shutdown <vm name>|<vmid>@cluster         Shutdown vm."
+   echo "  stop <vm name>|<vmid>@cluster             Force stop vm."
+   echo "  stat <vm name>|<vmid>@cluster <interval>  Show vm statistics every interval times (defaults to 1)."
+   echo "  createct <ct name>@cluster "
+  
    exit 1
 }
 
@@ -372,7 +378,11 @@ vm_stat() {
 # ostemplate
 # vmid -> retrieve next from cluster properties
 ct_create() {
-   vars="unpriv boot"
+   declare -A vars=(['unpriv']='1' 
+                    ['boot']='0' 
+                    ['tmpl']='' 
+                    ['rootfs']=''
+                    ['rootsize']='4' )
 
    vmname="$1"
    shift
@@ -382,63 +392,67 @@ ct_create() {
    else
       usage
    fi
-   # Check for defaults from configuration
-   for var in $vars; do
+   # Check for defaults from configuration or assign default
+   for var in ${!vars[@]}; do
       tmp="$var[$cluster]"
-      if test "${!tmp}" != ""; then
-         declare "$var=${!tmp}"
-      fi
+      test "${vars[$var]}" != "" && declare "$var=${vars[$var]}"
+      test "${!tmp}" != "" && declare "$var=${!tmp}"
+      case "$var" in
+         "tmpl")
+            tmp="${var}_${!tmp}[$cluster]"
+            tmpl="${!tmp}"
+         ;;
+      esac
    done
 
    while test "$#" -ne "0"; do
       if test "$1" != "${1/=/}"; then label="${1/=*/}"; else label="$1"; fi
       case "$label" in
-      "tmpl")
-         tmpl="${1/*=/}"
-         tmpl="tmpl_$tmpl[$cluster]"
-         tmpl="${!tmpl}"
-         test "$tmpl" = "" && message -1 "No default template specified in configuration."
+      "tmpl") tmpl="${1/*=/}"
+              tmpl="tmpl_$tmpl[$cluster]"
+              tmpl="${!tmpl}"
+              test "$tmpl" = "" && tmpl="${1/*=/}"
       ;;
-      "unpriv"|"boot")
-         declare "$label=${1/*=/}"
-      ;;
-      "*")
-         usage
+      *) if test "${vars[$label]+abc}"; then
+            declare "$label=${1/*=/}"
+         else
+            message -1 "Unknown argument $label"
+         fi
       ;;
       esac
       shift
    done
    # Check if all variable are defined
    err=0
-   for var in $vars; do
+   for var in ${!vars[@]}; do
       test "${!var}" = "" && { message 0 "Variable $var not defined."; err=1; }
    done
    test "$err" -gt "0" && exit 1
 
-
    ctid=$(CURL lnw cluster/nextid | jq --raw-output .data)
    test "$ctid" = "" && message -1 "Unable to get free id."
-   echo $tmpl
-   echo $ctid
-   exit 1
-
    CURL lnw nodes/localhost/lxc -XPOST \
-      --data vmid=$ctid \
+      --data-urlencode vmid=$ctid \
+      --data-urlencode hostname=$vmname \
       --data-urlencode ostemplate="$tmpl" \
-      --data unprivilegded="$unpriv" \
-      --data-urlencode net0="name=eth0,bridge=vmbr10" \
-      --data "rootfs=pve:4" \
-      -XPOST
-   echo $?
+      --data-urlencode unprivileged="$unpriv" \
+      --data-urlencode net0="name=eth0,bridge=vmbr10,ip=192.168.1.245/24,gw=192.168.1.1" \
+      --data-urlencode rootfs="$rootfs:$rootsize" \
+      -XPOST > /dev/null
+   ret=$?
+   echo $ctid
+   return $ret
 }
 
 vm_destroy() {
+   vmname="$1"
    clus_find_name "$vmname"
    test "${#result[*]}" = 0 && { echo "No matches found."; exit 1; }
    test "${#result[*]}" -gt 1 && { echo "More than one match found."; vm_showmultiple; exit 1; }
    res=( ${result[0]} )
-   CURL ${res[$R_CLUS]} nodes/${res[$R_HOST]}/${res[$R_TYPE]}/${res[$R_ID]} -XDELETE
+   CURL ${res[$R_CLUS]} nodes/${res[$R_HOST]}/${res[$R_TYPE]}/${res[$R_ID]} -XDELETE > /dev/null
    test "$?" -ne "0" && message -1 "Unable to destroy $vmname"
+   return 0
 }
 
 main() {
