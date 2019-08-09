@@ -54,7 +54,7 @@ CURL() {
       token=$(echo $data | jq --raw-output '.data.CSRFPreventionToken')
       flock -x -w 2 "$CACHE" echo -e "$cluster\t$(date '+%s')\t$token\t$cookie" >> "$CACHE"
    fi
-   $CMD --header "CSRFPreventionToken:$token" --cookie "$cookie" https://${hostname[$cluster]}:8006/api2/json/$*
+   $CMD --header "CSRFPreventionToken:$token" --cookie "$cookie" https://${hostname[$cluster]}:8006/api2/json/"$@"
    return $?
 }
 
@@ -71,6 +71,8 @@ usage() {
    echo "  stop <vm name>|<vmid>@cluster             Force stop vm."
    echo "  stat <vm name>|<vmid>@cluster <interval>  Show vm statistics every interval times (defaults to 1)."
    echo "  createct <ct name>@cluster "
+   echo "  snap <vm name>@cluster <snapshotname> [description]    Make snapshot."
+   echo "  snaplist <vm name>@cluster                List snapshots."
   
    exit 1
 }
@@ -289,7 +291,7 @@ vm_status() {
    test "${#result[*]}" = 0 && { echo "No matches found."; exit 1; }
    test "${#result[*]}" -gt 1 && { echo "More than one match found."; vm_showmultiple; exit 1; }
    res=( ${result[0]} )
-   CURL ${res[$R_CLUS]} nodes/${res[$R_HOST]}/${res[$R_TYPE]}/${res[$R_ID]}/status/current | jq .
+   CURL ${res[$R_CLUS]} nodes/${res[$R_HOST]}/${res[$R_TYPE]}/${res[$R_ID]}/status/current | jq  -r '.data | [.name, .status, .lock, .pid, .vmid, .cpus, .cpu, .disk, .maxdisk, .mem, .maxmem, .swap, .maxswap] | @tsv'
    test "$?" -ne "0" && message -1 "Unable to get status for $vmname"
 }
 
@@ -305,7 +307,7 @@ vm_stat() {
    res=( ${result[0]} )
 
    while test 1; do
-      CURL ${res[$R_CLUS]} "nodes/${res[$R_HOST]}/${res[$R_TYPE]}" | jq -r ".data[] | select(.vmid==\"${res[$R_ID]}\") | [.cpu,.mem,.maxmem,.netin,.netout,.diskread,.diskwrite] | @tsv"
+      CURL ${res[$R_CLUS]} nodes/${res[$R_HOST]}/${res[$R_TYPE]}/${res[$R_ID]}/status/current | jq -r ".data | [.cpu,.mem,.maxmem,.netin,.netout,.diskread,.diskwrite] | @tsv"
       sleep $int
    done | awk -vLINES=$LINES 'BEGIN { LINES--; line=LINES; 
              split("B KB MB GB TB PB EB ZB YB", B);
@@ -461,6 +463,36 @@ vm_destroy() {
    return 0
 }
 
+vm_snap() {
+   local vmname="$1"
+   local snapshot="$2"
+   local desc="$3"
+
+   test "$snapshot" = "" && { message -1 "Requires snapshot name"; exit 1; }
+
+   clus_find_name "$vmname"
+   test "${#result[*]}" = 0 && { echo "No matches found."; exit 1; }
+   test "${#result[*]}" -gt 1 && { echo "More than one match found."; vm_showmultiple; exit 1; }
+   res=( ${result[0]} )
+   CURL ${res[$R_CLUS]} \
+      nodes/${res[$R_HOST]}/${res[$R_TYPE]}/${res[$R_ID]}/snapshot -XPOST \
+      --data-urlencode snapname="$snapshot" \
+      --data-urlencode description="$desc"
+   test "$?" -ne "0" && message -1 "Unable to snapshot for $vmname"
+}
+
+vm_snaplist() {
+   local vmname="$1"
+
+   clus_find_name "$vmname"
+   test "${#result[*]}" = 0 && { echo "No matches found."; exit 1; }
+   test "${#result[*]}" -gt 1 && { echo "More than one match found."; vm_showmultiple; exit 1; }
+   res=( ${result[0]} )
+   CURL ${res[$R_CLUS]} \
+      nodes/${res[$R_HOST]}/${res[$R_TYPE]}/${res[$R_ID]}/snapshot | jq -r '.data | sort_by(.snaptime)[] | select(.snaptime!=null) | [.name, .snaptime, .description] | @tsv' | awk -F $'\t' '{ printf("%s %s (%s)\n", strftime("%Y/%m/%d %H:%M:%S", $2), $1, $3); }'
+   test "$?" -ne "0" && message -1 "Unable to list snapshots for $vmname"
+}
+
 main() {
    unset https_proxy
    verbose=0
@@ -496,6 +528,14 @@ main() {
       "destroy")
          shift
          vm_destroy "$@"
+      ;;
+      "snap")
+         shift
+         vm_snap "$@"
+      ;;
+      "snaplist")
+         shift
+         vm_snaplist "$@"
       ;;
       *) usage
       ;;
