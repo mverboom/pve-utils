@@ -120,22 +120,21 @@ message() {
    fi
 }
 
+# find name in specific cluster
 find_name() {
-   cluster=$1
-   name=$2
+   local cluster=$1
+   local name=$2
    local nodes; local node; local data; local result
 
    unset clause
    #test $active -eq 1 && clause="and .status == \"running\""
 
    nodes=$(CURL $cluster nodes/ | jq -r ".data[] | .node")
-   for node in $nodes
-   do
+   for node in $nodes; do
       data="$(CURL $cluster nodes/$node/lxc/) $(CURL $cluster nodes/$node/qemu/)"
-      result=$(echo $data | jq -r ".data[] | select((.name  | contains(\"$name\")) $clause) | \"$node \(.vmid) \(.name) \(.type // \"qemu\") \(.status)\"")
-      if test "$result" != ""; then
-         echo "$cluster $result"
-      fi
+      while read result; do 
+         test "$result" != "" && echo "$cluster $result"
+      done < <(echo $data | jq -r ".data[] | select((.name  | contains(\"$name\")) $clause) | \"$node \(.vmid) \(.name) \(.type // \"qemu\") \(.status)\"")
    done
 }
 
@@ -207,7 +206,7 @@ clus_find_name() {
       for node in $nodes; do
          data="$(CURL $cluster nodes/$node/lxc/) $(CURL $cluster nodes/$node/qemu/)"
          res=$(echo $data | jq -r ".data[] | select(.vmid==\"$id\") | \"$node \(.vmid) \(.name) \(.type // \"qemu\") \(.status)\"")
-         test "$res" != "" && result+=( "$cluster $res" )
+         test "$res" != "" && { res="$cluster $res"; result+=( "$res" ); }
       done
    else
       while read line; do
@@ -287,7 +286,6 @@ vm_status() {
    local vmname="$1"
 
    clus_find_name "$vmname"
-   #find_name "lnw" "$vmname"
    test "${#result[*]}" = 0 && { echo "No matches found."; exit 1; }
    test "${#result[*]}" -gt 1 && { echo "More than one match found."; vm_showmultiple; exit 1; }
    res=( ${result[0]} )
@@ -307,13 +305,13 @@ vm_stat() {
    res=( ${result[0]} )
 
    while test 1; do
-      CURL ${res[$R_CLUS]} "nodes/${res[$R_HOST]}/${res[$R_TYPE]}" | jq -r ".data[] | select(.name | contains(\"${res[$R_VM]}\")) | [.cpu,.mem,.maxmem,.netin,.netout,.diskread,.diskwrite] | @tsv"
+      CURL ${res[$R_CLUS]} "nodes/${res[$R_HOST]}/${res[$R_TYPE]}" | jq -r ".data[] | select(.vmid==\"${res[$R_ID]}\") | [.cpu,.mem,.maxmem,.netin,.netout,.diskread,.diskwrite] | @tsv"
       sleep $int
    done | awk -vLINES=$LINES 'BEGIN { LINES--; line=LINES; 
              split("B KB MB GB TB PB EB ZB YB", B);
              split("b/s Kb/s Mb/s Gb/s Tb/s", bs);
              split("B/s KB/s MB/s GB/s TB/s", Bs);
-             oldtime=systime()-1; netinold=0; netoutold=0; }
+             oldtime=systime()-1; netinold=0; netoutold=0; diskreadold=0; diskwriteold=0 }
              function ppB(num) {
                 s=1
                 while (num > 1024 && s < 9) {
@@ -343,14 +341,14 @@ vm_stat() {
 
 
              { if (line == LINES) {
-                  printf("  cpu  -----memory------ -------network-------\n");
-                  printf("   %     alloc /  max         in       out\n");
+                  printf("  cpu  -----memory------ -------network------- ---------disk--------\n");
+                  printf("   %     alloc /  max         in       out          read    write\n");
                   line=2;
                }
              }
              { newtime=systime();
-               cpu=$1*100; mem=$2; memmax=$3; netin=$4; netout=$5; diskread=$6
-               diskwrite=$7
+               cpu=$1*100; mem=$2; memmax=$3; netin=$4; netout=$5
+               diskread=$6; diskwrite=$7
                if (netinold == 0) netinold=netin;
                if (netoutold == 0) netoutold=netout;
                if (diskreadold == 0) diskreadold=diskread;
@@ -359,7 +357,7 @@ vm_stat() {
                netouts=(netout - netoutold)/(newtime-oldtime);
                diskreads=(diskread - diskreadold)/(newtime-oldtime);
                diskwrites=(diskwrite - diskwriteold)/(newtime-oldtime);
-               printf("%5.1f%% %s/%s %s %s\n", cpu, ppB(mem), ppB(memmax), ppbs(netins), ppbs(netouts));
+               printf("%5.1f%% %s/%s %s %s %s %s\n", cpu, ppB(mem), ppB(memmax), ppbs(netins), ppbs(netouts), ppBs(diskreads), ppBs(diskwrites));
                line++;
                oldtime=newtime;
                netinold=netin;
