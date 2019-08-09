@@ -91,7 +91,6 @@ parse_config() {
 action() {
    cluster=$1
 
-   #CURL="curl -m $TIMEOUT -f -s -k"
    CURL="curl  -f -s -k"
 
    test $verbose -eq 1 && echo "${hostname[$cluster]}: Connecting."
@@ -321,7 +320,7 @@ vm_stat() {
                    num /= 1024
                    s++
                 }
-                return(sprintf("%6.1f%s", num, B[s]));
+                return(sprintf("%6.1f%2s", num, B[s]));
              }
              function ppbs(num) {
                 s=1;
@@ -330,7 +329,7 @@ vm_stat() {
                    num /= 1024
                    s++
                 }
-                return(sprintf("%6.1f%s", num, bs[s]));
+                return(sprintf("%6.1f%4s", num, bs[s]));
              }
              function ppBs(num) {
                 s=1;
@@ -339,7 +338,7 @@ vm_stat() {
                    num /= 1024
                    s++
                 }
-                return(sprintf("%6.1f%s", num, Bs[s]));
+                return(sprintf("%6.1f%4s", num, Bs[s]));
              }
 
 
@@ -381,11 +380,14 @@ ct_create() {
    declare -A vars=(['unpriv']='1' 
                     ['boot']='0' 
                     ['tmpl']='' 
+                    ['mem']='1024'
+                    ['swap']='256'
                     ['rootfs']=''
                     ['rootsize']='4' )
-
-   vmname="$1"
+   local extraargs=""
+   local vmname="$1"
    shift
+
    if test "${vmname/@/}" != "$vmname"; then
       cluster="${vmname/*@/}"
       vmname="${vmname/@*/}"
@@ -413,6 +415,10 @@ ct_create() {
               tmpl="${!tmpl}"
               test "$tmpl" = "" && tmpl="${1/*=/}"
       ;;
+      "net") 
+           #--data-urlencode net0="name=eth0,bridge=vmbr10,ip=192.168.1.245/24,gw=192.168.1.1"
+           # net=eth0,vmbr10,192.168.1.245/24 n=eth1,vmbr10
+      ;;
       *) if test "${vars[$label]+abc}"; then
             declare "$label=${1/*=/}"
          else
@@ -436,8 +442,10 @@ ct_create() {
       --data-urlencode hostname=$vmname \
       --data-urlencode ostemplate="$tmpl" \
       --data-urlencode unprivileged="$unpriv" \
-      --data-urlencode net0="name=eth0,bridge=vmbr10,ip=192.168.1.245/24,gw=192.168.1.1" \
+      --data-urlencode memory="$mem" \
+      --data-urlencode swap="$swap" \
       --data-urlencode rootfs="$rootfs:$rootsize" \
+      $extraargs
       -XPOST > /dev/null
    ret=$?
    echo $ctid
