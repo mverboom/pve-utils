@@ -467,6 +467,7 @@ vm_snap() {
    local vmname="$1"
    local snapshot="$2"
    local desc="$3"
+   local upid
 
    test "$snapshot" = "" && { message -1 "Requires snapshot name"; exit 1; }
 
@@ -474,11 +475,11 @@ vm_snap() {
    test "${#result[*]}" = 0 && { echo "No matches found."; exit 1; }
    test "${#result[*]}" -gt 1 && { echo "More than one match found."; vm_showmultiple; exit 1; }
    res=( ${result[0]} )
-   CURL ${res[$R_CLUS]} \
+   upid=$(CURL ${res[$R_CLUS]} \
       nodes/${res[$R_HOST]}/${res[$R_TYPE]}/${res[$R_ID]}/snapshot -XPOST \
       --data-urlencode snapname="$snapshot" \
-      --data-urlencode description="$desc" > /dev/null
-   test "$?" -ne "0" && message -1 "Unable to snapshot for $vmname"
+      --data-urlencode description="$desc" | jq -r .data)
+   taskchk "${res[$R_CLUS]}" "${res[$R_HOST]}" "$upid"
 }
 
 vm_snaplist() {
@@ -496,6 +497,7 @@ vm_snaplist() {
 vm_snaprm() {
    local vmname="$1"
    local snapshot="$2"
+   local upid
 
    test "$snapshot" = "" && { message -1 "Requires snapshot name"; exit 1; }
 
@@ -506,10 +508,52 @@ vm_snaprm() {
    CURL ${res[$R_CLUS]} \
       nodes/${res[$R_HOST]}/${res[$R_TYPE]}/${res[$R_ID]}/snapshot/$snapshot/config > /dev/null
    test "$?" -ne "0" && { message -1 "Snapshot $snapshot doesn't exist on ${res[$R_VM]}."; exit 1; }
-   CURL ${res[$R_CLUS]} \
+   upid=$(CURL ${res[$R_CLUS]} \
       nodes/${res[$R_HOST]}/${res[$R_TYPE]}/${res[$R_ID]}/snapshot/$snapshot \
-      -XDELETE > /dev/null
+      -XDELETE  | jq -r .data)
+   taskchk "${res[$R_CLUS]}" "${res[$R_HOST]}" "$upid"
    test "$?" -ne "0" && message -1 "Unable to delete snapshot $snapshot for $vmname"
+}
+
+vm_snaprollback() {
+   local vmname="$1"
+   local snapshot="$2"
+   local upid
+
+   test "$snapshot" = "" && { message -1 "Requires snapshot name"; exit 1; }
+
+   clus_find_name "$vmname"
+   test "${#result[*]}" = 0 && { echo "No matches found."; exit 1; }
+   test "${#result[*]}" -gt 1 && { echo "More than one match found."; vm_showmultiple; exit 1; }
+   res=( ${result[0]} )
+   CURL ${res[$R_CLUS]} \
+      nodes/${res[$R_HOST]}/${res[$R_TYPE]}/${res[$R_ID]}/snapshot/$snapshot/config > /dev/null
+   test "$?" -ne "0" && { message -1 "Snapshot $snapshot doesn't exist on ${res[$R_VM]}."; exit 1; }
+   upid=$(CURL ${res[$R_CLUS]} \
+      nodes/${res[$R_HOST]}/${res[$R_TYPE]}/${res[$R_ID]}/snapshot/$snapshot/rollback \
+      -XPOST  | jq -r .data)
+   taskchk "${res[$R_CLUS]}" "${res[$R_HOST]}" "$upid"
+   test "$?" -ne "0" && message -1 "Unable to delete snapshot $snapshot for $vmname"
+}
+
+taskchk() {
+   local cluster="$1"
+   local node="$2"
+   local upid="$3"
+   local status="running"
+
+   echo -n "run."
+
+   while test "$status" = "running"; do
+      eval $(CURL "$cluster" nodes/$node/tasks/$upid/status | jq -r '"status=" + .data.status + "\nexitstatus=\"" + .data.exitstatus + "\""' )
+      echo -n "."
+      sleep 1
+   done
+   if test "$exitstatus" != "OK"; then
+      echo "fail: $exitstatus"
+   else
+      echo "ok"
+   fi
 }
 
 main() {
@@ -560,7 +604,10 @@ main() {
          shift
          vm_snaprm "$@"
       ;;
-
+      "snaprollback")
+         shift
+         vm_snaprollback "$@"
+      ;;
       *) usage
       ;;
    esac
