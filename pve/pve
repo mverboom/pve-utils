@@ -21,7 +21,7 @@ CURL() {
    local now; local cluster; local ret
    #CMD="curl -m $TIMEOUT --fail --silent --insecure -D/dev/null"
    CMD="curl --fail --insecure -D/dev/null"
-   test "$verbose" -eq 0 && CMD="$CMD --silent"
+   test "$verbose" -le 0 && CMD="$CMD --silent"
 
    local cluster="$1"
    shift
@@ -63,6 +63,7 @@ usage() {
    echo "Submits command tasks over multiple nodes/clusters on containers and VM's."
    echo
    echo "  -v      Be more verbose (increase every time option is used)."
+   echo "  -q      Be quiet."
    echo "  -x      Debug mode enable."
    echo
    echo "  status <vm name>|<vmid>@cluster           Shows status of vm."
@@ -115,10 +116,10 @@ action() {
 message() {
    local level=$1
    local msg="$2"
-   if test "$level" -lt 0; then
+   if test "$level" -lt 0 -a "$verbose" != "-1" ; then
       ( >&2 echo "$msg" ) > /dev/null 
    else
-      test "$verbose" -ge "$level" && ( >&2 echo "$msg" ) > /dev/null 
+      test "$verbose" -ge "$level" -a "$verbose" != "-1" && ( >&2 echo "$msg" ) > /dev/null 
    fi
 }
 
@@ -163,9 +164,11 @@ sanity_check() {
 }
 
 parse_options() {
-   while getopts :igcvx opt; do
+   while getopts :igcqvx opt; do
       case $opt in
          v) verbose=$(( verbose + 1 ))
+         ;;
+         q) verbose=-1
          ;;
          c) connect=1
          ;;
@@ -236,13 +239,16 @@ clus_find_name() {
 vm_action() {
    local action="$1"
    local vmname="$2"
+   local upid
 
    clus_find_name "$vmname"
    test "${#result[*]}" = 0 && { echo "No matches found."; exit 1; }
-   test "${#result[*]}" -gt 1 && { echo "More than one match found."; exit 1; }
+   test "${#result[*]}" -gt 1 && { echo "More than one match found."; vm_showmultiple; exit 1; }
+
    res=( ${result[0]} )
-   CURL ${res[$R_CLUS]} nodes/${res[$R_HOST]}/${res[$R_TYPE]}/${res[$R_ID]}/status/$action -XPOST > /dev/null
-   test "$?" -ne "0" && message -1 "Unable to $action $vmname"
+   upid=$(CURL ${res[$R_CLUS]} nodes/${res[$R_HOST]}/${res[$R_TYPE]}/${res[$R_ID]}/status/$action -XPOST | jq -r .data)
+   taskchk "${res[$R_CLUS]}" "${res[$R_HOST]}" "$upid"
+   test "$?" -ne "0" && message -1 "Unable to $action ${res[$R_VM]}"
    return 0
 }
 
@@ -278,6 +284,7 @@ vm_terminal() {
 }
 
 vm_showmultiple() {
+   test "$verbose" = "-1" && return
    for (( i = 0; i < ${#result[*]}; i++)); do
       res=( ${result[$i]} )
       echo "${res[$R_CLUS]}: ${res[$R_VM]} (${res[R_ID]})"
@@ -376,6 +383,7 @@ vm_stat() {
 # network bridge + device name
 # ostemplate
 # vmid -> retrieve next from cluster properties
+# make system in cluster optional, default to localhost
 ct_create() {
    declare -A vars=(['unpriv']='1' 
                     ['boot']='0' 
@@ -435,9 +443,9 @@ ct_create() {
    done
    test "$err" -gt "0" && exit 1
 
-   ctid=$(CURL lnw cluster/nextid | jq --raw-output .data)
+   ctid=$(CURL $cluster cluster/nextid | jq --raw-output .data)
    test "$ctid" = "" && message -1 "Unable to get free id."
-   CURL lnw nodes/localhost/lxc -XPOST \
+   upid=$(CURL $cluster nodes/localhost/lxc -XPOST \
       --data-urlencode vmid=$ctid \
       --data-urlencode hostname=$vmname \
       --data-urlencode ostemplate="$tmpl" \
@@ -445,21 +453,24 @@ ct_create() {
       --data-urlencode memory="$mem" \
       --data-urlencode swap="$swap" \
       --data-urlencode rootfs="$rootfs:$rootsize" \
-      $extraargs
-      -XPOST > /dev/null
-   ret=$?
+      $extraargs | jq -r .data)
+   taskchk "$cluster" "localhost" "$upid"
+   test "$?" -ne "0" && { message -1 "Unable to create container"; return 1; }
    echo $ctid
-   return $ret
+   return 0
 }
 
 vm_destroy() {
-   vmname="$1"
+   local vmname="$1"
+   local upid
+
    clus_find_name "$vmname"
-   test "${#result[*]}" = 0 && { echo "No matches found."; exit 1; }
-   test "${#result[*]}" -gt 1 && { echo "More than one match found."; vm_showmultiple; exit 1; }
+   test "${#result[*]}" = 0 && { message -1 "No matches found."; exit 1; }
+   test "${#result[*]}" -gt 1 && { message -1 "More than one match found."; vm_showmultiple; exit 1; }
    res=( ${result[0]} )
-   CURL ${res[$R_CLUS]} nodes/${res[$R_HOST]}/${res[$R_TYPE]}/${res[$R_ID]} -XDELETE > /dev/null
-   test "$?" -ne "0" && message -1 "Unable to destroy $vmname"
+   upid=$(CURL ${res[$R_CLUS]} nodes/${res[$R_HOST]}/${res[$R_TYPE]}/${res[$R_ID]} -XDELETE | jq -r .data)
+   taskchk "${res[$R_CLUS]}" "${res[$R_HOST]}" "$upid"
+   test "$?" -ne "0" && { message -1 "Unable to destroy $vmname"; return 1; }
    return 0
 }
 
@@ -542,17 +553,20 @@ taskchk() {
    local upid="$3"
    local status="running"
 
-   echo -n "run."
+   test "$upid" = "" && { message -1 "No task running."; return 1 ; }
+   test "$verbose" -ne "-1" && echo -n "run."
 
    while test "$status" = "running"; do
       eval $(CURL "$cluster" nodes/$node/tasks/$upid/status | jq -r '"status=" + .data.status + "\nexitstatus=\"" + .data.exitstatus + "\""' )
-      echo -n "."
+      test "$verbose" -ne "-1" && echo -n "."
       sleep 1
    done
    if test "$exitstatus" != "OK"; then
-      echo "fail: $exitstatus"
+      test "$verbose" -ne "-1" && echo "fail: $exitstatus"
+      return 1
    else
-      echo "ok"
+      test "$verbose" -ne "-1" && echo "ok"
+      return 0
    fi
 }
 
