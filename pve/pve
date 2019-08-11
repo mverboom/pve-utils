@@ -116,10 +116,11 @@ action() {
 message() {
    local level=$1
    local msg="$2"
+   local opt="$3"
    if test "$level" -lt 0 -a "$verbose" != "-1" ; then
-      ( >&2 echo "$msg" ) > /dev/null 
+      ( >&2 echo $opt "$msg" ) > /dev/null 
    else
-      test "$verbose" -ge "$level" -a "$verbose" != "-1" && ( >&2 echo "$msg" ) > /dev/null 
+      test "$verbose" -ge "$level" -a "$verbose" != "-1" && ( >&2 echo $opt "$msg" ) > /dev/null 
    fi
 }
 
@@ -144,9 +145,9 @@ find_name() {
 sanity_check() {
    err=0
 
-   ! test -f $CFG && { echo "No config file found ($CFG)."; err=1; }
+   ! test -f $CFG && { message - "No config file found ($CFG)."; err=1; }
 
-   test $err -eq 0 && test $(stat -c %a $CFG) -gt 600 && { echo "Unsafe permissions on config file."; err=1; }
+   test $err -eq 0 && test $(stat -c %a $CFG) -gt 600 && { message -1 "Unsafe permissions on config file."; err=1; }
 
    for name in $SW
    do
@@ -156,9 +157,9 @@ sanity_check() {
          err=1
       fi
    done
-   test "$missing" != "" && echo "Missing required software to run script:$missing"
+   test "$missing" != "" && message -1 "Missing required software to run script:$missing"
 
-   test $# -lt 1 && { echo "At least one argument required."; err=1; }
+   test $# -lt 1 && { message -1 "At least one argument required."; err=1; }
 
    test $err -ne 0 && usage
 }
@@ -178,7 +179,7 @@ parse_options() {
          ;;
          x) set -x
          ;;
-         \?) echo "Unknowing options: -$OPTARG"
+         \?) message -1 "Unknowing options: -$OPTARG"
              usage
          ;;
       esac
@@ -189,7 +190,7 @@ vnc() {
    server=$1
    type=$2
    vmid=$3
-   test $verbose -eq 1 && echo "Connecting to server $server for $name..."
+   message 1 "Connecting to server $server for $name..."
 
    port=$((netstat -atn | awk '{printf "%s\n%s\n", $4, $4}' | grep -oE '[0-9]*$'; seq 32768 61000) | sort -n | uniq -u | head -n 1)
    socat TCP-LISTEN:$port,bind=127.0.0.1 exec:"ssh root@$server qm vncproxy $vmid" &
@@ -242,8 +243,8 @@ vm_action() {
    local upid
 
    clus_find_name "$vmname"
-   test "${#result[*]}" = 0 && { echo "No matches found."; exit 1; }
-   test "${#result[*]}" -gt 1 && { echo "More than one match found."; vm_showmultiple; exit 1; }
+   test "${#result[*]}" = 0 && { message -1 "No matches found."; exit 1; }
+   test "${#result[*]}" -gt 1 && { message -1 "More than one match found."; vm_showmultiple; exit 1; }
 
    res=( ${result[0]} )
    upid=$(CURL ${res[$R_CLUS]} nodes/${res[$R_HOST]}/${res[$R_TYPE]}/${res[$R_ID]}/status/$action -XPOST | jq -r .data)
@@ -263,8 +264,8 @@ vm_terminal() {
    local vmname="$1"
 
    clus_find_name "$vmname"
-   test "${#result[*]}" = 0 && { echo "No matches found."; exit 1; }
-   test "${#result[*]}" -gt 1 && { echo "More than one match found."; exit 1; }
+   test "${#result[*]}" = 0 && { message -1 "No matches found."; exit 1; }
+   test "${#result[*]}" -gt 1 && { message -1 "More than one match found."; exit 1; }
    res=( ${result[0]} )
    data="$(CURL ${res[$R_CLUS]} nodes/${res[$R_HOST]}/${res[$R_TYPE]}/${res[$R_ID]}/termproxy -XPOST)"
    port=$(echo $data | jq --raw-output .data.port)
@@ -295,8 +296,8 @@ vm_status() {
    local vmname="$1"
 
    clus_find_name "$vmname"
-   test "${#result[*]}" = 0 && { echo "No matches found."; exit 1; }
-   test "${#result[*]}" -gt 1 && { echo "More than one match found."; vm_showmultiple; exit 1; }
+   test "${#result[*]}" = 0 && { message -1 "No matches found."; exit 1; }
+   test "${#result[*]}" -gt 1 && { message -1 "More than one match found."; vm_showmultiple; exit 1; }
    res=( ${result[0]} )
    CURL ${res[$R_CLUS]} nodes/${res[$R_HOST]}/${res[$R_TYPE]}/${res[$R_ID]}/status/current | jq  -r '.data | [.name, .status, .lock, .pid, .vmid, .cpus, .cpu, .disk, .maxdisk, .mem, .maxmem, .swap, .maxswap] | @tsv'
    test "$?" -ne "0" && message -1 "Unable to get status for $vmname"
@@ -309,8 +310,8 @@ vm_stat() {
    test "$int" = "" && int=5
 
    clus_find_name "$vmname"
-   test "${#result[*]}" = 0 && { echo "No matches found for $vmname."; exit 1; }
-   test "${#result[*]}" -gt 1 && { echo "More than one match found."; vm_showmultiple; exit 1; }
+   test "${#result[*]}" = 0 && { message -1 "No matches found for $vmname."; exit 1; }
+   test "${#result[*]}" -gt 1 && { message -1 "More than one match found."; vm_showmultiple; exit 1; }
    res=( ${result[0]} )
 
    while test 1; do
@@ -483,8 +484,8 @@ vm_snap() {
    test "$snapshot" = "" && { message -1 "Requires snapshot name"; exit 1; }
 
    clus_find_name "$vmname"
-   test "${#result[*]}" = 0 && { echo "No matches found."; exit 1; }
-   test "${#result[*]}" -gt 1 && { echo "More than one match found."; vm_showmultiple; exit 1; }
+   test "${#result[*]}" = 0 && { message -1 "No matches found."; exit 1; }
+   test "${#result[*]}" -gt 1 && { message -1 "More than one match found."; vm_showmultiple; exit 1; }
    res=( ${result[0]} )
    upid=$(CURL ${res[$R_CLUS]} \
       nodes/${res[$R_HOST]}/${res[$R_TYPE]}/${res[$R_ID]}/snapshot -XPOST \
@@ -497,8 +498,8 @@ vm_snaplist() {
    local vmname="$1"
 
    clus_find_name "$vmname"
-   test "${#result[*]}" = 0 && { echo "No matches found."; exit 1; }
-   test "${#result[*]}" -gt 1 && { echo "More than one match found."; vm_showmultiple; exit 1; }
+   test "${#result[*]}" = 0 && { message -1 "No matches found."; exit 1; }
+   test "${#result[*]}" -gt 1 && { message -1 "More than one match found."; vm_showmultiple; exit 1; }
    res=( ${result[0]} )
    CURL ${res[$R_CLUS]} \
       nodes/${res[$R_HOST]}/${res[$R_TYPE]}/${res[$R_ID]}/snapshot | jq -r '.data | sort_by(.snaptime)[] | select(.snaptime!=null) | [.name, .snaptime, .description] | @tsv' | awk -F $'\t' '{ printf("%s %s (%s)\n", strftime("%Y/%m/%d %H:%M:%S", $2), $1, $3); }'
@@ -513,8 +514,8 @@ vm_snaprm() {
    test "$snapshot" = "" && { message -1 "Requires snapshot name"; exit 1; }
 
    clus_find_name "$vmname"
-   test "${#result[*]}" = 0 && { echo "No matches found."; exit 1; }
-   test "${#result[*]}" -gt 1 && { echo "More than one match found."; vm_showmultiple; exit 1; }
+   test "${#result[*]}" = 0 && { message -1 "No matches found."; exit 1; }
+   test "${#result[*]}" -gt 1 && { message -1 "More than one match found."; vm_showmultiple; exit 1; }
    res=( ${result[0]} )
    CURL ${res[$R_CLUS]} \
       nodes/${res[$R_HOST]}/${res[$R_TYPE]}/${res[$R_ID]}/snapshot/$snapshot/config > /dev/null
@@ -534,8 +535,8 @@ vm_snaprollback() {
    test "$snapshot" = "" && { message -1 "Requires snapshot name"; exit 1; }
 
    clus_find_name "$vmname"
-   test "${#result[*]}" = 0 && { echo "No matches found."; exit 1; }
-   test "${#result[*]}" -gt 1 && { echo "More than one match found."; vm_showmultiple; exit 1; }
+   test "${#result[*]}" = 0 && { message -1 "No matches found."; exit 1; }
+   test "${#result[*]}" -gt 1 && { message -1 "More than one match found."; vm_showmultiple; exit 1; }
    res=( ${result[0]} )
    CURL ${res[$R_CLUS]} \
       nodes/${res[$R_HOST]}/${res[$R_TYPE]}/${res[$R_ID]}/snapshot/$snapshot/config > /dev/null
@@ -554,18 +555,18 @@ taskchk() {
    local status="running"
 
    test "$upid" = "" && { message -1 "No task running."; return 1 ; }
-   test "$verbose" -ne "-1" && echo -n "run."
+   test "$verbose" -ne "-1" && message 0 "run." -n
 
    while test "$status" = "running"; do
       eval $(CURL "$cluster" nodes/$node/tasks/$upid/status | jq -r '"status=" + .data.status + "\nexitstatus=\"" + .data.exitstatus + "\""' )
-      test "$verbose" -ne "-1" && echo -n "."
+      test "$verbose" -ne "-1" && message 0 "." -n
       sleep 1
    done
    if test "$exitstatus" != "OK"; then
-      test "$verbose" -ne "-1" && echo "fail: $exitstatus"
+      test "$verbose" -ne "-1" && message -1 "fail: $exitstatus"
       return 1
    else
-      test "$verbose" -ne "-1" && echo "ok"
+      test "$verbose" -ne "-1" && message 0 "ok"
       return 0
    fi
 }
