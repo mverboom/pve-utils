@@ -66,6 +66,7 @@ usage() {
    echo "  -q      Be quiet."
    echo "  -x      Debug mode enable."
    echo
+   echo "  list <cluster>                            List vm's in all or specific cluster."
    echo "  status <vm name>|<vmid>@cluster           Shows status of vm."
    echo "  start <vm name>|<vmid>@cluster            Start vm."
    echo "  shutdown <vm name>|<vmid>@cluster         Shutdown vm."
@@ -571,6 +572,25 @@ taskchk() {
    fi
 }
 
+vm_list() {
+   local nodes
+   local clusnodes
+   local cluster
+
+   if test "$1" != ""; then
+      clusnodes="$1"
+   else
+      clusnodes="${!hostname[*]}"
+   fi
+
+   for cluster in $clusnodes; do
+      nodes=$(CURL $cluster nodes/ | jq -r ".data[] | .node")
+      for node in $nodes; do
+         ( CURL $cluster nodes/$node/lxc/; CURL $cluster nodes/$node/qemu/ ) | jq -r ".data[] | \"$node \(.vmid) \(.name) \(.type // \"qemu\") \(.status)\""
+      done
+   done 
+}
+
 main() {
    unset https_proxy
    verbose=0
@@ -623,6 +643,11 @@ main() {
          shift
          vm_snaprollback "$@"
       ;;
+      "list")
+         shift
+         vm_list "$@"
+      ;;
+
       *) usage
       ;;
    esac
