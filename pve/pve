@@ -75,6 +75,8 @@ usage() {
    echo "  createct <ct name>@cluster "
    echo "  snap <vm name>@cluster <snapshotname> [description]    Make snapshot."
    echo "  snaplist <vm name>@cluster                List snapshots."
+   echo "  cfgshow <vm name>|<vmid>@cluster       Show vm configuration."
+   echo "  cfgset <vm name>|<vmid>@cluster        Set vm configuration items."
    echo "  clone <vm name>|<vm name>@cluster         Clone vm."
   
    exit 1
@@ -463,6 +465,61 @@ ct_create() {
    return 0
 }
 
+vm_cfgset() {
+   local vmname="$1"
+   local upid
+   local opts
+   local del
+
+   declare -A allowed=( ['cores']='1'
+                        ['cpulimit]='1'
+                        ['cpuunits]='1'
+                        ['description']='1'
+                        ['lock']='1'
+                        ['memory']='1'
+                        ['nameserver']='1'
+                        ['onboot']='1'
+                        ['searchdom']='1'
+                        ['startup']='1'
+                        ['swap']='1'
+                        ['tty']='1'
+                        ['hostname']='1' )
+   shift
+
+   clus_find_name "$vmname"
+   test "${#result[*]}" = 0 && { message -1 "No matches found."; exit 1; }
+   test "${#result[*]}" -gt 1 && { message -1 "More than one match found."; vm_showmultiple; exit 1; }
+   res=( ${result[0]} )
+
+   while test "$#" -ne "0"; do
+      if test "$1" != "${1/=/}"; then 
+         label="${1/=*/}"
+         val="${1/*=/}"
+      else
+         label="$1"
+      fi
+      test "${allowed[$label]}" != "1" && { message -1 "Option $label unknown."; exit 1;}
+      if test "$1" != "${1/=/}"; then 
+         opts+=( --data-urlencode $label="$val" )
+      else
+         del+=" $label"
+      fi
+      shift
+   done
+   if test "$del" != ""; then
+      del="${del/ /}"
+      del="${del// /,}"
+      opts+=( --data-urlencode delete=$del )
+   fi
+
+   CURL ${res[$R_CLUS]} \
+      nodes/${res[$R_HOST]}/${res[$R_TYPE]}/${res[$R_ID]}/config \
+      "${opts[@]}" \
+      -XPUT > /dev/null
+   test "$?" -ne "0" && { message -1 "Unable to change configuration for $vmname"; return 1; }
+   return 0
+}
+
 vm_destroy() {
    local vmname="$1"
    local upid
@@ -573,6 +630,18 @@ vm_clone() {
    fi
 }
 
+vm_cfgshow() {
+   local vmname="$1"
+   local upid
+
+   clus_find_name "$vmname"
+   test "${#result[*]}" = 0 && { message -1 "No matches found."; exit 1; }
+   test "${#result[*]}" -gt 1 && { message -1 "More than one match found."; vm_showmultiple; exit 1; }
+   res=( ${result[0]} )
+   CURL ${res[$R_CLUS]} \
+      nodes/${res[$R_HOST]}/${res[$R_TYPE]}/${res[$R_ID]}/config | jq -r '.data'
+}
+
 taskchk() {
    local cluster="$1"
    local node="$2"
@@ -671,7 +740,14 @@ main() {
          shift
          vm_clone "$@"
       ;;
-
+      "cfgshow")
+         shift
+         vm_cfgshow "$@"
+      ;;
+      "cfgset")
+         shift
+         vm_cfgset "$@"
+      ;;
       "list")
          shift
          vm_list "$@"
