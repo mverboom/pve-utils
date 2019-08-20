@@ -75,6 +75,7 @@ usage() {
    echo "  createct <ct name>@cluster "
    echo "  snap <vm name>@cluster <snapshotname> [description]    Make snapshot."
    echo "  snaplist <vm name>@cluster                List snapshots."
+   echo "  clone <vm name>|<vm name>@cluster         Clone vm."
   
    exit 1
 }
@@ -549,6 +550,29 @@ vm_snaprollback() {
    test "$?" -ne "0" && message -1 "Unable to delete snapshot $snapshot for $vmname"
 }
 
+vm_clone() {
+   local vmname="$1"
+   local upid
+   local cloneid
+
+   clus_find_name "$vmname"
+   test "${#result[*]}" = 0 && { message -1 "No matches found."; exit 1; }
+   test "${#result[*]}" -gt 1 && { message -1 "More than one match found."; vm_showmultiple; exit 1; }
+   res=( ${result[0]} )
+   cloneid=$(CURL ${res[$R_CLUS]} cluster/nextid | jq --raw-output .data)
+   upid=$(CURL ${res[$R_CLUS]} \
+      nodes/${res[$R_HOST]}/${res[$R_TYPE]}/${res[$R_ID]}/clone \
+      --data-urlencode newid="$cloneid" \
+      -XPOST  | jq -r .data)
+   taskchk "${res[$R_CLUS]}" "${res[$R_HOST]}" "$upid"
+   if test "$?" -ne "0";then
+      message -1 "Unable to clone $vmname"
+      return 1
+   else
+      echo "$cloneid"
+   fi
+}
+
 taskchk() {
    local cluster="$1"
    local node="$2"
@@ -556,18 +580,18 @@ taskchk() {
    local status="running"
 
    test "$upid" = "" && { message -1 "No task running."; return 1 ; }
-   test "$verbose" -ne "-1" && message 0 "run." -n
+   message 0 "run." -n
 
    while test "$status" = "running"; do
       eval $(CURL "$cluster" nodes/$node/tasks/$upid/status | jq -r '"status=" + .data.status + "\nexitstatus=\"" + .data.exitstatus + "\""' )
-      test "$verbose" -ne "-1" && message 0 "." -n
+      message 0 "." -n
       sleep 1
    done
    if test "$exitstatus" != "OK"; then
-      test "$verbose" -ne "-1" && message -1 "fail: $exitstatus"
+      message -1 "fail: $exitstatus"
       return 1
    else
-      test "$verbose" -ne "-1" && message 0 "ok"
+      message 0 "ok"
       return 0
    fi
 }
@@ -643,6 +667,11 @@ main() {
          shift
          vm_snaprollback "$@"
       ;;
+      "clone")
+         shift
+         vm_clone "$@"
+      ;;
+
       "list")
          shift
          vm_list "$@"
