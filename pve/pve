@@ -1,6 +1,7 @@
 #!/bin/bash
 #
 # pve: commandline Proxmox Virtual Environment interface
+#
 
 CFG=~/.pve-find.ini
 SW="jq curl socat xtigervncviewer awk"
@@ -752,7 +753,9 @@ main() {
          shift
          vm_list "$@"
       ;;
-
+      "list-clusters")
+         printf "%s\n" "${!hostname[@]}"
+      ;;
       *) usage
       ;;
    esac
