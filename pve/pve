@@ -20,8 +20,8 @@ CURL() {
    local CMD; local data; local cookie; local token; local cache; local age
    local age
    local now; local cluster; local ret
-   #CMD="curl -m $TIMEOUT --fail --silent --insecure -D/dev/null"
-   CMD="curl --fail --insecure -D/dev/null"
+   #CMD="curl -m $TIMEOUT --fail --silent --insecure --dump-header /dev/null"
+   CMD="curl --fail --show-error --insecure --dump-header /dev/null"
    test "$verbose" -le 0 && CMD="$CMD --silent"
 
    local cluster="$1"
@@ -73,9 +73,12 @@ usage() {
    echo "  shutdown <vm name>|<vmid>@cluster         Shutdown vm."
    echo "  stop <vm name>|<vmid>@cluster             Force stop vm."
    echo "  stat <vm name>|<vmid>@cluster <interval>  Show vm statistics every interval times (defaults to 1)."
-   echo "  createct <ct name>@cluster "
+   echo "  createct <ct name>@cluster"
+   echo "  destroy <vm name>|<vmid@cluster>          Destroy vm."
    echo "  snap <vm name>@cluster <snapshotname> [description]    Make snapshot."
    echo "  snaplist <vm name>@cluster                List snapshots."
+   echo "  snaprm <vm name>@cluster <snapshotname>   Delete snapshot."
+   echo "  snaprollback <vm name>@cluster                List snapshots."
    echo "  cfgshow <vm name>|<vmid>@cluster       Show vm configuration."
    echo "  cfgset <vm name>|<vmid>@cluster        Set vm configuration items."
    echo "  clone <vm name>|<vm name>@cluster         Clone vm."
@@ -114,7 +117,7 @@ action() {
    CURL="$CURL -S -b $cookie"
 
    # port remains open for about 10 seconds
-   curl -s -D/dev/stderr -k -H "$token" -b "$cookie" -XPOST https://${hostname[$cluster]}:8006/api2/json/nodes/avon/qemu/200/vncproxy | jq .
+   curl -s --dump-header /dev/stderr -k -H "$token" -b "$cookie" -XPOST https://${hostname[$cluster]}:8006/api2/json/nodes/avon/qemu/200/vncproxy | jq .
    xtigervncviewer avon:5900
 }
 
@@ -608,6 +611,8 @@ vm_snaprollback() {
    test "$?" -ne "0" && message -1 "Unable to delete snapshot $snapshot for $vmname"
 }
 
+# ToDo: 
+# * check if running
 vm_clone() {
    local vmname="$1"
    local upid
@@ -648,13 +653,17 @@ taskchk() {
    local node="$2"
    local upid="$3"
    local status="running"
+   local pos=0
+   local anim='|/-\'
 
    test "$upid" = "" && { message -1 "No task running."; return 1 ; }
-   message 0 "run." -n
+   #message 0 "run." -n
 
    while test "$status" = "running"; do
       eval $(CURL "$cluster" nodes/$node/tasks/$upid/status | jq -r '"status=" + .data.status + "\nexitstatus=\"" + .data.exitstatus + "\""' )
-      message 0 "." -n
+      message 0 "${anim:$pos:1}" -n
+      pos=$(( pos + 1 ))
+      test $pos -ge ${#anim} && pos=0
       sleep 1
    done
    if test "$exitstatus" != "OK"; then

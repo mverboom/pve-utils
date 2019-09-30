@@ -1,4 +1,9 @@
 ToDo item list:
 
+* Split function out to pve api library
 * Add option to not include site in automatic actions
 * Try to create bash completion including options and hinting
+* vm add/remove pool
+* list pools
+* create pool
+* delete pool
