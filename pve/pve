@@ -663,7 +663,7 @@ taskchk() {
       message 0 "${anim:$pos:1}" -n
       pos=$(( pos + 1 ))
       test $pos -ge ${#anim} && pos=0
-      sleep 1
+      sleep 0.5
    done
    if test "$exitstatus" != "OK"; then
       message -1 "fail: $exitstatus"
