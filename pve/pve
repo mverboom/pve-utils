@@ -7,16 +7,17 @@ CFG=~/.pve-find.ini
 SW="jq curl socat xtigervncviewer awk"
 CACHE=~/.pve-cache
 
+lib="$( dirname $0 )/libpve.sh"
+test -e "$lib" && source "$lib" || { echo "Library not found."; exit 1; }
+
 declare -A COOKIE
 declare -A TOKEN
 TIMEOUT=1
 # Login session time cache
 SESSION=300
-# Named indices for found information on vm
-readonly R_CLUS=0 R_HOST=1 R_ID=2 R_VM=3 R_TYPE=4 R_STATE=5
 
-# CURL <cluster> "extra args"
-CURL() {
+# pve_apireq <cluster> "extra args"
+OLDpve_apireq() {
    local CMD; local data; local cookie; local token; local cache; local age
    local age
    local now; local cluster; local ret
@@ -85,26 +86,13 @@ usage() {
    exit 1
 }
 
-parse_config() {
-   while IFS='= ' read var val
-   do
-      if [[ $var == \[*] ]]
-      then
-          section=${var:1:-1}
-      elif [[ $val ]]
-      then
-          declare -g -A "$var[$section]=$val"
-      fi
-   done < <(grep -v "^#" $CFG)
-}
-
 action() {
    cluster=$1
 
-   CURL="curl  -f -s -k"
+   pve_apireq="curl  -f -s -k"
 
    test $verbose -eq 1 && echo "${hostname[$cluster]}: Connecting."
-   data=$($CURL -d @<(cat <<<"username=${user[$cluster]}&password=${password[$cluster]}")  https://${hostname[$cluster]}:8006/api2/json/access/ticket)
+   data=$($pve_apireq -d @<(cat <<<"username=${user[$cluster]}&password=${password[$cluster]}")  https://${hostname[$cluster]}:8006/api2/json/access/ticket)
    ret=$?
    test $ret -eq 7 && { test $verbose -eq 1 && echo "${hostname[$cluster]}: Failed to connect."; exit 1; }
    test $ret -eq 28 && { test $verbose -eq 1 && echo "${hostname[$cluster]}: Timed out."; exit 1; }
@@ -113,7 +101,7 @@ action() {
    cookie=$(echo $data | jq --raw-output '.data.ticket' | sed 's/^/PVEAuthCookie=/')
    token="CSRFPreventionToken: $(echo $data | jq --raw-output '.data.CSRFPreventionToken')"
 
-   CURL="$CURL -S -b $cookie"
+   pve_apireq="$pve_apireq -S -b $cookie"
 
    # port remains open for about 10 seconds
    curl -s --dump-header /dev/stderr -k -H "$token" -b "$cookie" -XPOST https://${hostname[$cluster]}:8006/api2/json/nodes/avon/qemu/200/vncproxy | jq .
@@ -132,7 +120,7 @@ message() {
 }
 
 # find name in specific cluster
-find_name() {
+old_find_name() {
    local cluster=$1
    local name=$2
    local nodes; local node; local data; local result
@@ -140,16 +128,16 @@ find_name() {
    unset clause
    #test $active -eq 1 && clause="and .status == \"running\""
 
-   nodes=$(CURL $cluster nodes/ | jq -r ".data[] | .node")
+   nodes=$(pve_apireq $cluster nodes/ | jq -r ".data[] | .node")
    for node in $nodes; do
-      data="$(CURL $cluster nodes/$node/lxc/) $(CURL $cluster nodes/$node/qemu/)"
+      data="$(pve_apireq $cluster nodes/$node/lxc/) $(pve_apireq $cluster nodes/$node/qemu/)"
       while read result; do 
          test "$result" != "" && echo "$cluster $result"
       done < <(echo $data | jq -r ".data[] | select((.name  | contains(\"$name\")) $clause) | \"$node \(.vmid) \(.name) \(.type // \"qemu\") \(.status)\"")
    done
 }
 
-sanity_check() {
+old_sanity_check() {
    err=0
 
    ! test -f $CFG && { message - "No config file found ($CFG)."; err=1; }
@@ -215,9 +203,9 @@ clus_find_name() {
    if test "${vmname/@/}" != "$vmname"; then
       cluster="${vmname/*@/}"
       id="${vmname/@*/}"
-      nodes=$(CURL $cluster nodes/ | jq -r ".data[] | .node")
+      nodes=$(pve_apireq $cluster nodes/ | jq -r ".data[] | .node")
       for node in $nodes; do
-         data="$(CURL $cluster nodes/$node/lxc/) $(CURL $cluster nodes/$node/qemu/)"
+         data="$(pve_apireq $cluster nodes/$node/lxc/) $(pve_apireq $cluster nodes/$node/qemu/)"
          res=$(echo $data | jq -r ".data[] | select(.vmid==\"$id\") | \"$node \(.vmid) \(.name) \(.type // \"qemu\") \(.status)\"")
          test "$res" != "" && { res="$cluster $res"; result+=( "$res" ); }
       done
@@ -254,7 +242,7 @@ vm_action() {
    test "${#result[*]}" -gt 1 && { message -1 "More than one match found."; vm_showmultiple; exit 1; }
 
    res=( ${result[0]} )
-   upid=$(CURL ${res[$R_CLUS]} nodes/${res[$R_HOST]}/${res[$R_TYPE]}/${res[$R_ID]}/status/$action -XPOST | jq -r .data)
+   upid=$(pve_apireq ${res[$R_CLUS]} nodes/${res[$R_HOST]}/${res[$R_TYPE]}/${res[$R_ID]}/status/$action -XPOST | jq -r .data)
    taskchk "${res[$R_CLUS]}" "${res[$R_HOST]}" "$upid"
    test "$?" -ne "0" && message -1 "Unable to $action ${res[$R_VM]}"
    return 0
@@ -274,7 +262,7 @@ vm_terminal() {
    test "${#result[*]}" = 0 && { message -1 "No matches found."; exit 1; }
    test "${#result[*]}" -gt 1 && { message -1 "More than one match found."; exit 1; }
    res=( ${result[0]} )
-   data="$(CURL ${res[$R_CLUS]} nodes/${res[$R_HOST]}/${res[$R_TYPE]}/${res[$R_ID]}/termproxy -XPOST)"
+   data="$(pve_apireq ${res[$R_CLUS]} nodes/${res[$R_HOST]}/${res[$R_TYPE]}/${res[$R_ID]}/termproxy -XPOST)"
    port=$(echo $data | jq --raw-output .data.port)
    ticket=$(echo $data | jq --raw-output .data.ticket)
 
@@ -306,7 +294,7 @@ vm_status() {
    test "${#result[*]}" = 0 && { message -1 "No matches found."; exit 1; }
    test "${#result[*]}" -gt 1 && { message -1 "More than one match found."; vm_showmultiple; exit 1; }
    res=( ${result[0]} )
-   CURL ${res[$R_CLUS]} nodes/${res[$R_HOST]}/${res[$R_TYPE]}/${res[$R_ID]}/status/current | jq  -r '.data | [.name, .status, .lock, .pid, .vmid, .cpus, .cpu, .disk, .maxdisk, .mem, .maxmem, .swap, .maxswap] | @tsv'
+   pve_apireq ${res[$R_CLUS]} nodes/${res[$R_HOST]}/${res[$R_TYPE]}/${res[$R_ID]}/status/current | jq  -r '.data | [.name, .status, .lock, .pid, .vmid, .cpus, .cpu, .disk, .maxdisk, .mem, .maxmem, .swap, .maxswap] | @tsv'
    test "$?" -ne "0" && message -1 "Unable to get status for $vmname"
 }
 
@@ -322,7 +310,7 @@ vm_stat() {
    res=( ${result[0]} )
 
    while test 1; do
-      CURL ${res[$R_CLUS]} nodes/${res[$R_HOST]}/${res[$R_TYPE]}/${res[$R_ID]}/status/current | jq -r ".data | [.cpu,.mem,.maxmem,.netin,.netout,.diskread,.diskwrite] | @tsv"
+      pve_apireq ${res[$R_CLUS]} nodes/${res[$R_HOST]}/${res[$R_TYPE]}/${res[$R_ID]}/status/current | jq -r ".data | [.cpu,.mem,.maxmem,.netin,.netout,.diskread,.diskwrite] | @tsv"
       sleep $int
    done | awk -vLINES=$LINES 'BEGIN { LINES--; line=LINES; 
              split("B KB MB GB TB PB EB ZB YB", B);
@@ -451,9 +439,9 @@ ct_create() {
    done
    test "$err" -gt "0" && exit 1
 
-   ctid=$(CURL $cluster cluster/nextid | jq --raw-output .data)
+   ctid=$(pve_apireq $cluster cluster/nextid | jq --raw-output .data)
    test "$ctid" = "" && message -1 "Unable to get free id."
-   upid=$(CURL $cluster nodes/localhost/lxc -XPOST \
+   upid=$(pve_apireq $cluster nodes/localhost/lxc -XPOST \
       --data-urlencode vmid=$ctid \
       --data-urlencode hostname=$vmname \
       --data-urlencode ostemplate="$tmpl" \
@@ -515,7 +503,7 @@ vm_cfgset() {
       opts+=( --data-urlencode delete=$del )
    fi
 
-   CURL ${res[$R_CLUS]} \
+   pve_apireq ${res[$R_CLUS]} \
       nodes/${res[$R_HOST]}/${res[$R_TYPE]}/${res[$R_ID]}/config \
       "${opts[@]}" \
       -XPUT > /dev/null
@@ -531,7 +519,7 @@ vm_destroy() {
    test "${#result[*]}" = 0 && { message -1 "No matches found."; exit 1; }
    test "${#result[*]}" -gt 1 && { message -1 "More than one match found."; vm_showmultiple; exit 1; }
    res=( ${result[0]} )
-   upid=$(CURL ${res[$R_CLUS]} nodes/${res[$R_HOST]}/${res[$R_TYPE]}/${res[$R_ID]} -XDELETE | jq -r .data)
+   upid=$(pve_apireq ${res[$R_CLUS]} nodes/${res[$R_HOST]}/${res[$R_TYPE]}/${res[$R_ID]} -XDELETE | jq -r .data)
    taskchk "${res[$R_CLUS]}" "${res[$R_HOST]}" "$upid"
    test "$?" -ne "0" && { message -1 "Unable to destroy $vmname"; return 1; }
    return 0
@@ -549,7 +537,7 @@ vm_snap() {
    test "${#result[*]}" = 0 && { message -1 "No matches found."; exit 1; }
    test "${#result[*]}" -gt 1 && { message -1 "More than one match found."; vm_showmultiple; exit 1; }
    res=( ${result[0]} )
-   upid=$(CURL ${res[$R_CLUS]} \
+   upid=$(pve_apireq ${res[$R_CLUS]} \
       nodes/${res[$R_HOST]}/${res[$R_TYPE]}/${res[$R_ID]}/snapshot -XPOST \
       --data-urlencode snapname="$snapshot" \
       --data-urlencode description="$desc" | jq -r .data)
@@ -563,7 +551,7 @@ vm_snaplist() {
    test "${#result[*]}" = 0 && { message -1 "No matches found."; exit 1; }
    test "${#result[*]}" -gt 1 && { message -1 "More than one match found."; vm_showmultiple; exit 1; }
    res=( ${result[0]} )
-   CURL ${res[$R_CLUS]} \
+   pve_apireq ${res[$R_CLUS]} \
       nodes/${res[$R_HOST]}/${res[$R_TYPE]}/${res[$R_ID]}/snapshot | jq -r '.data | sort_by(.snaptime)[] | select(.snaptime!=null) | [.name, .snaptime, .description] | @tsv' | awk -F $'\t' '{ printf("%s %s (%s)\n", strftime("%Y/%m/%d %H:%M:%S", $2), $1, $3); }'
    test "$?" -ne "0" && message -1 "Unable to list snapshots for $vmname"
 }
@@ -579,10 +567,10 @@ vm_snaprm() {
    test "${#result[*]}" = 0 && { message -1 "No matches found."; exit 1; }
    test "${#result[*]}" -gt 1 && { message -1 "More than one match found."; vm_showmultiple; exit 1; }
    res=( ${result[0]} )
-   CURL ${res[$R_CLUS]} \
+   pve_apireq ${res[$R_CLUS]} \
       nodes/${res[$R_HOST]}/${res[$R_TYPE]}/${res[$R_ID]}/snapshot/$snapshot/config > /dev/null
    test "$?" -ne "0" && { message -1 "Snapshot $snapshot doesn't exist on ${res[$R_VM]}."; exit 1; }
-   upid=$(CURL ${res[$R_CLUS]} \
+   upid=$(pve_apireq ${res[$R_CLUS]} \
       nodes/${res[$R_HOST]}/${res[$R_TYPE]}/${res[$R_ID]}/snapshot/$snapshot \
       -XDELETE  | jq -r .data)
    taskchk "${res[$R_CLUS]}" "${res[$R_HOST]}" "$upid"
@@ -600,10 +588,10 @@ vm_snaprollback() {
    test "${#result[*]}" = 0 && { message -1 "No matches found."; exit 1; }
    test "${#result[*]}" -gt 1 && { message -1 "More than one match found."; vm_showmultiple; exit 1; }
    res=( ${result[0]} )
-   CURL ${res[$R_CLUS]} \
+   pve_apireq ${res[$R_CLUS]} \
       nodes/${res[$R_HOST]}/${res[$R_TYPE]}/${res[$R_ID]}/snapshot/$snapshot/config > /dev/null
    test "$?" -ne "0" && { message -1 "Snapshot $snapshot doesn't exist on ${res[$R_VM]}."; exit 1; }
-   upid=$(CURL ${res[$R_CLUS]} \
+   upid=$(pve_apireq ${res[$R_CLUS]} \
       nodes/${res[$R_HOST]}/${res[$R_TYPE]}/${res[$R_ID]}/snapshot/$snapshot/rollback \
       -XPOST  | jq -r .data)
    taskchk "${res[$R_CLUS]}" "${res[$R_HOST]}" "$upid"
@@ -621,8 +609,8 @@ vm_clone() {
    test "${#result[*]}" = 0 && { message -1 "No matches found."; exit 1; }
    test "${#result[*]}" -gt 1 && { message -1 "More than one match found."; vm_showmultiple; exit 1; }
    res=( ${result[0]} )
-   cloneid=$(CURL ${res[$R_CLUS]} cluster/nextid | jq --raw-output .data)
-   upid=$(CURL ${res[$R_CLUS]} \
+   cloneid=$(pve_apireq ${res[$R_CLUS]} cluster/nextid | jq --raw-output .data)
+   upid=$(pve_apireq ${res[$R_CLUS]} \
       nodes/${res[$R_HOST]}/${res[$R_TYPE]}/${res[$R_ID]}/clone \
       --data-urlencode newid="$cloneid" \
       -XPOST  | jq -r .data)
@@ -643,7 +631,7 @@ vm_cfgshow() {
    test "${#result[*]}" = 0 && { message -1 "No matches found."; exit 1; }
    test "${#result[*]}" -gt 1 && { message -1 "More than one match found."; vm_showmultiple; exit 1; }
    res=( ${result[0]} )
-   CURL ${res[$R_CLUS]} \
+   pve_apireq ${res[$R_CLUS]} \
       nodes/${res[$R_HOST]}/${res[$R_TYPE]}/${res[$R_ID]}/config | jq -r '.data'
 }
 
@@ -659,7 +647,7 @@ taskchk() {
    #message 0 "run." -n
 
    while test "$status" = "running"; do
-      eval $(CURL "$cluster" nodes/$node/tasks/$upid/status | jq -r '"status=" + .data.status + "\nexitstatus=\"" + .data.exitstatus + "\""' )
+      eval $(pve_apireq "$cluster" nodes/$node/tasks/$upid/status | jq -r '"status=" + .data.status + "\nexitstatus=\"" + .data.exitstatus + "\""' )
       message 0 "${anim:$pos:1}" -n
       pos=$(( pos + 1 ))
       test $pos -ge ${#anim} && pos=0
@@ -686,9 +674,9 @@ vm_list() {
    fi
 
    for cluster in $clusnodes; do
-      nodes=$(CURL $cluster nodes/ | jq -r ".data[] | .node")
+      nodes=$(pve_apireq $cluster nodes/ | jq -r ".data[] | .node")
       for node in $nodes; do
-         ( CURL $cluster nodes/$node/lxc/; CURL $cluster nodes/$node/qemu/ ) | jq -r ".data[] | \"$node \(.vmid) \(.name) \(.type // \"qemu\") \(.status)\""
+         ( pve_apireq $cluster nodes/$node/lxc/; pve_apireq $cluster nodes/$node/qemu/ ) | jq -r ".data[] | \"$node \(.vmid) \(.name) \(.type // \"qemu\") \(.status)\""
       done
    done 
 }
@@ -699,7 +687,7 @@ main() {
    graphical=0
 
    sanity_check "$@"
-   parse_config
+   pve_readconfig $CFG
    parse_options "$@"
    shift $((OPTIND -1))
    cmd="$1"

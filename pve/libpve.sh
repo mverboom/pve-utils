@@ -34,7 +34,7 @@ pve_apireq() {
    local cluster="$1"
    shift
 
-   test -e "$_PVE_CACHE" && { hmod 600 "$_PVE_CACHE"; cache="$(grep -m 1 ^$cluster$'\t' $_PVE_CACHE)"; }
+   test -e "$_PVE_CACHE" && { chmod 600 "$_PVE_CACHE"; cache="$(grep -m 1 ^$cluster$'\t' $_PVE_CACHE)"; }
    if test "$cache" != ""; then
       message 2 "$cluster: Login cookie in cache."
       now=$(date "+%s")
@@ -64,6 +64,7 @@ pve_apireq() {
    $CMD --header "CSRFPreventionToken:$token" --cookie "$cookie" https://${hostname[$cluster]}:8006/api2/json/"$@"
    return $?
 }
+readonly -f pve_apireq
 
 # Read configuration file
 #
@@ -76,7 +77,10 @@ pve_readconfig() {
    local section
    local cfg
 
-   test "$1" = "" && cfg="$_PVE_CFGDEFAULT"
+   test "$1" = "" && cfg="$_PVE_CFGDEFAULT" || cfg="$1"
+
+   ! test -e $cfg && { message - "No config file found ($_PVE_CFG)."; exit 1; }
+   test $err -eq 0 && test $(stat -c %a $cfg) -gt 600 && { message -1 "Unsafe permissions on config file."; exit 1; }
 
    while IFS='= ' read var val
    do
@@ -89,6 +93,7 @@ pve_readconfig() {
       fi
    done < <(grep -v "^#" $cfg)
 }
+readonly -f pve_readconfig
 
 # find name in specific cluster
 find_name() {
@@ -99,21 +104,18 @@ find_name() {
    unset clause
    #test $active -eq 1 && clause="and .status == \"running\""
 
-   nodes=$(CURL $cluster nodes/ | jq -r ".data[] | .node")
+   nodes=$(pve_apireq $cluster nodes/ | jq -r ".data[] | .node")
    for node in $nodes; do
-      data="$(CURL $cluster nodes/$node/lxc/) $(CURL $cluster nodes/$node/qemu/)"
+      data="$(pve_apireq $cluster nodes/$node/lxc/) $(pve_apireq $cluster nodes/$node/qemu/)"
       while read result; do 
          test "$result" != "" && echo "$cluster $result"
       done < <(echo $data | jq -r ".data[] | select((.name  | contains(\"$name\")) $clause) | \"$node \(.vmid) \(.name) \(.type // \"qemu\") \(.status)\"")
    done
 }
+readonly -f find_name
 
 sanity_check() {
    err=0
-
-   ! test -f $_PVE_CFG && { message - "No config file found ($_PVE_CFG)."; err=1; }
-
-   test $err -eq 0 && test $(stat -c %a $_PVE_CFG) -gt 600 && { message -1 "Unsafe permissions on config file."; err=1; }
 
    for name in $_PVE_SW
    do
@@ -129,3 +131,4 @@ sanity_check() {
 
    test $err -ne 0 && usage
 }
+readonly -f sanity_check
