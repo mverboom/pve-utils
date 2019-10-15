@@ -27,8 +27,7 @@ CURL() {
    local cluster="$1"
    shift
 
-   chmod 600 "$CACHE"
-   test -e "$CACHE" && cache="$(grep -m 1 ^$cluster$'\t' $CACHE)"
+   test -e "$CACHE" && { chmod 600 "$CACHE"; cache="$(grep -m 1 ^$cluster$'\t' $CACHE)"; }
    if test "$cache" != ""; then
       message 2 "$cluster: Login cookie in cache."
       now=$(date "+%s")
