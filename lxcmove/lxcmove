@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+#
+# Copy lxc container from local system to remote system.
+# Be ware of:
+# * This script does not take clusters into account.
+# * Only containers with rootfs will be copied
+# * Ssh access to remote system is required
+# * Requires zfs as local and target storage
+
+CFGPVE=/etc/pve
+CFGSTORAGE="$CFGPVE/storage.cfg"
+CFGLXC="$CFGPVE/lxc"
+
+usage() {
+   echo "$0 <ctid> <target system> <target storage name>"
+   exit 1
+}
+
+main() {
+   test "$#" -ne "3" && { echo "Insufficient arguments."; usage; }
+   CT="$1"
+   DST="$2"
+   DSTSTOR="$3"
+
+   # sanity checks
+   type pv > /dev/null 2>&1 || { echo "Error, command pv not found."; usage; }
+   test -e "$CFGLXC/$CT.conf" || { echo "Error, can't find lxc config file."; usage; }
+   grep -q "^mp" "$CFGLXC/$CT.conf" && { echo "Additional mountpoints found, currently not supported."; usage; }
+   ssh -o StrictHostKeyChecking=yes $DST exit || { echo "Error, ssh to $DST does not seem to work."; usage; }
+   ssh $DST "test -e $CFGLXC/$CT.conf" && { echo "Error, $CT already exists on $DST."; usage; }
+
+   storage=$(pct config "$CT" | sed '/^rootfs/!d; s/rootfs: \(.\+\),.*/\1/' )
+   test "$storage" = "" && { echo "Unable to determine location of rootfs."; usage; }
+
+   store="${storage/:*/}"
+   ds="${storage/*:/}"
+
+   grep -q "^zfspool: $store" $CFGSTORAGE || { echo "Unable to find zfspool storage $store"; usage; }
+   ssh $DST "grep -q \"^zfspool: $DSTSTOR\" $CFGSTORAGE" || { echo "Unable to find zfspool storage $DSTSTOR"; usage; }
+
+   srcds=$(sed -n "/: $store$/,/^$/ { /^\tpool/ s/.*pool //gp }" $CFGSTORAGE )
+   test "$srcds" = "" && { echo "Unable to determine source zfs dataset."; usage; }
+   zfs list $srcds/$ds@migrate > /dev/null 2>&1 && { echo "Snapshot $srcds/$ds@migrate already exists."; usage; }
+   zfs list $srcds/$ds@migrate-i > /dev/null 2>&1 && { echo "Snapshot $srcds/$ds@migrate-i already exists."; usage; }
+
+   dstds=$(ssh $DST "cat $CFGSTORAGE" | sed -n "/: $DSTSTOR$/,/^$/ { /^\tpool/ s/.*pool //gp }" )
+   test "$dstds" = "" && { echo "Unable to determine target zfs dataset."; usage; }
+   ssh $DST "zfs list $dstds > /dev/null 2>&1" || { echo "Storage $dstds does not exist on $DST."; usage; }
+   ssh $DST "zfs list $dstds/$ds > /dev/null 2>&1" && { echo "Storage $dstds/$ds already exists on $DST."; usage; }
+
+   transfer=$(zfs list -H -p -o logicalused $srcds/$ds)
+   transferh=$(zfs list -H -o logicalused $srcds/$ds)
+
+   if test "$(pct status $CT | grep running)" != ""; then
+      run=1
+   else
+      run=0
+   fi
+
+   echo "Going to migrate container $CT:"
+   echo "   local $srcds/$ds -> $DST $dstds/$ds ($transferh)"
+   test "$run" -eq 1 && echo "   Container is running, will start on remote node."
+   test "$run" -eq 0 && echo "   Container is not running, will not start on remote node."
+   echo "Press enter to start or ctrl-c to abort."
+   read line
+
+   echo "Sending full snapshot."
+   zfs snapshot $srcds/$ds@migrate || { echo "Snapshot failed. Aborting."; exit 1; }
+   zfs send $srcds/$ds@migrate | pv -s $transfer | ssh $DST "zfs recv $dstds/$ds"
+   [[ "${PIPESTATUS[@]}" != "0 0 0" ]] && { echo "Zfs transfer failed. Aborting."; exit 1;}
+
+   if test "$run" -eq "1"; then
+      echo "Shutting down $CT."
+      pct shutdown $CT
+      if test "$?" -ne "0"; then
+         echo "Shutdown failed, stopping."
+         pct stop $CT || { echo "Stop failed. Aborting."; exit 1; }
+      fi
+   fi
+
+   echo "Sending incremental snapshot."
+   zfs snapshot $srcds/$ds@migrate-i || { echo "Incremental snapshot failed. Aborting."; exit 1; }
+   transfer=$(zfs list -H -p -o used $srcds/$ds@migrate)
+   zfs send -i $srcds/$ds@migrate $srcds/$ds@migrate-i | pv -s $transfer | ssh $DST "zfs recv -F $dstds/$ds"
+   [[ "${PIPESTATUS[@]}" != "0 0 0" ]] && { echo "Zfs transfer failed. Aborting."; exit 1;}
+
+   echo "Cleaning up snapshots on local side."
+   zfs destroy $srcds/$ds@migrate-i || { echo "Snapshot destroy failed. Aborting."; exit 1; }
+   zfs destroy $srcds/$ds@migrate || { echo "Snapshot destroy failed. Aborting."; exit 1; }
+
+   echo "Cleaning up snapshots on $DST."
+   ssh $DST "zfs destroy $dstds/$ds@migrate-i" || { echo "Snapshot destroy failed. Aborting."; exit 1; }
+   ssh $DST "zfs destroy $dstds/$ds@migrate" || { echo "Snapshot destroy failed. Aborting."; exit 1; }
+
+   echo "Changing container configuration."
+   mv $CFGLXC/$CT.conf /tmp || { echo "Config move failed. Aborting."; exit 1; }
+   cat /tmp/$CT.conf | sed "s/$store:/$DSTSTOR:/" | ssh $DST "cat > $CFGLXC/$CT.conf"
+   [[ "${PIPESTATUS[@]}" != "0 0 0" ]] && { echo "Container config change failed. Aborting."; exit 1;}
+
+   if test "$run" -eq "1"; then
+      echo "Starting container $CT on $DST."
+      ssh $DST "pct start $CT"
+   fi
+   echo "Move complete."
+   echo "A copy of the original container config can be found at: /tmp/$CT.conf"
+   echo "The source dataset for container $CT is not removed."
+}
+
+main "$@"
