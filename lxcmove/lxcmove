@@ -70,12 +70,8 @@ main() {
    [[ "${PIPESTATUS[@]}" != "0 0 0" ]] && { echo "Zfs transfer failed. Aborting."; exit 1;}
 
    if test "$run" -eq "1"; then
-      echo "Shutting down $CT."
-      pct shutdown $CT
-      if test "$?" -ne "0"; then
-         echo "Shutdown failed, stopping."
-         pct stop $CT || { echo "Stop failed. Aborting."; exit 1; }
-      fi
+      echo "Stopping container $CT.."
+      pct stop $CT || { echo "Stop failed. Aborting."; exit 1; }
    fi
 
    echo "Sending incremental snapshot."
