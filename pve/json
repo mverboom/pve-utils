@@ -1,0 +1,55 @@
+{
+  "memory": 4096,
+  "swap": 512,
+  "onboot": 1,
+  "net0": "bridge=vmbr10,hwaddr=02:9E:3D:7A:85:46,name=eth0,type=veth",
+  "cpulimit": "2",
+  "mp1": "/media,mp=/media",
+  "startup": "order=5",
+  "arch": "amd64",
+  "lxc": [
+    [
+      "lxc.mount.entry",
+      "/home home none rbind 0 0"
+    ],
+    [
+      "lxc.idmap",
+      "u 0 100000 1000"
+    ],
+    [
+      "lxc.idmap",
+      "g 0 100000 1000"
+    ],
+    [
+      "lxc.idmap",
+      "u 1000 1000 10"
+    ],
+    [
+      "lxc.idmap",
+      "g 1000 1000 27"
+    ],
+    [
+      "lxc.idmap",
+      "u 1010 101010 64526"
+    ],
+    [
+      "lxc.idmap",
+      "g 1027 101027 64509"
+    ],
+    [
+      "lxc.mount.auto",
+      "proc:mixed sys:ro cgroup:mixed"
+    ],
+    [
+      "lxc.mount.entry",
+      "/dev/fuse dev/fuse none bind,create=file,rw,uid=165536,gid=165536 0 0"
+    ]
+  ],
+  "cores": 2,
+  "features": "keyctl=1,nesting=1",
+  "unprivileged": 1,
+  "rootfs": "pve:subvol-107-disk-1,size=30G",
+  "digest": "cccca1193065a51ba4f3a868e6c119821404daa8",
+  "ostype": "unmanaged",
+  "hostname": "shell.lnw.verboom.net"
+}

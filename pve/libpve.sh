@@ -79,7 +79,7 @@ pve_readconfig() {
 
    test "$1" = "" && cfg="$_PVE_CFGDEFAULT" || cfg="$1"
 
-   ! test -e $cfg && { message - "No config file found ($_PVE_CFG)."; exit 1; }
+   ! test -e $cfg && { message - "No config file found ($cfg)."; exit 1; }
    test $err -eq 0 && test $(stat -c %a $cfg) -gt 600 && { message -1 "Unsafe permissions on config file."; exit 1; }
 
    while IFS='= ' read var val

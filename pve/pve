@@ -7,8 +7,10 @@ CFG=~/.pve-find.ini
 SW="jq curl socat xtigervncviewer awk"
 CACHE=~/.pve-cache
 
-lib="$( dirname $0 )/libpve.sh"
-test -e "$lib" && source "$lib" || { echo "Library not found."; exit 1; }
+lib=$(realpath "$0")
+lib="$( dirname "$lib" )/libpve.sh"
+# shellcheck source=libpve.sh
+if test -e "$lib"; then source "$lib"; else echo "Library not found."; exit 1; fi
 
 declare -A COOKIE
 declare -A TOKEN
@@ -174,7 +176,7 @@ parse_options() {
          ;;
          x) set -x
          ;;
-         \?) message -1 "Unknowing options: -$OPTARG"
+         \?) message -1 "Unknown options: -$OPTARG"
              usage
          ;;
       esac
@@ -595,7 +597,7 @@ vm_snaprollback() {
       nodes/${res[$R_HOST]}/${res[$R_TYPE]}/${res[$R_ID]}/snapshot/$snapshot/rollback \
       -XPOST  | jq -r .data)
    taskchk "${res[$R_CLUS]}" "${res[$R_HOST]}" "$upid"
-   test "$?" -ne "0" && message -1 "Unable to delete snapshot $snapshot for $vmname"
+   test "$?" -ne "0" && message -1 "Unable to rollback snapshot $snapshot for $vmname"
 }
 
 # ToDo: 
