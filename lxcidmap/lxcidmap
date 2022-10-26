@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+
+usage() {
+   echo "$0 [-u|-g] <range..>"
+   echo
+   echo "Convert uid or gid ranges to lxc configuration items."
+   echo
+   echo "  -u  Convert for uid ranges."
+   echo "  -g  Convert for gid ranges."
+   echo
+   echo "A range is inclusive of the id's and is formatted like:"
+   echo "  startid-endid"
+   exit 1
+
+}
+
+test "$#" -eq 0 && usage
+
+OFFSET=100000
+LENGTH=65536
+START=0
+
+PRE="lxc.idmap: u"
+FILE="/etc/subuid"
+test "$1" = "-u" && shift
+test "$1" = "-g" && { PRE="lxc.idmap: g"; FILE="/etc/subgid"; shift; }
+
+echo "# Add to container configuration:"
+for range in $@; do
+   rstart=${range/-*}
+   rend=${range/*-}
+   if test $START -lt $rstart; then
+      echo "$PRE $START $(( OFFSET + START)) $(( rstart - START ))"
+      START=$rstart
+   fi
+   echo "$PRE $rstart $rstart $(( rend - rstart + 1 ))"
+   MAP+=( "root:$rstart:$(( rend - rstart + 1))" )
+   START=$(( START + ( rend - rstart + 1) ))
+done
+if test $START -lt $LENGTH; then
+   echo "$PRE $START $(( OFFSET + START)) $(( LENGTH - START ))"
+fi
+echo "# Add to ${FILE}:"
+printf "%s\n" ${MAP[*]}
