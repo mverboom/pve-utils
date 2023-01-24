@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+#
+# Clone an lxc container (COW) with zfs
+
+usage() {
+   echo "Usage: lxcclone <source container id> <new container id>"
+   exit 1
+}
+
+clone() {
+   echo pct snapshot ${CTID} clonesrc
+   
+   for fsid in $(sed -n "/^\(rootfs\|mp.\): / { s/^\(.*\): .*/\1/p }" /etc/pve/lxc/${CTID}.conf | sort -u); do
+      storeid=$(sed -n "/^${fsid}:/ { s/${fsid}: \(.*\):.*/\1/p;q}" /etc/pve/lxc/${CTID}.conf)
+      pool=$(grep -A 4 "zfspool: $storeid" /etc/pve/storage.cfg | sed -n "s/.*pool \(.*\)/\1/p")
+      disk=$(sed -n "/^${fsid}:/ { s/${fsid}: ${storeid}:\([^,]*\),.*/\1/p;q}" /etc/pve/lxc/${CTID}.conf)
+      test "$fsid" = "" -o "$storeid" = "" -o "$pool" = "" -o "$disk" = "" && { echo "Error for $fsid $storeid $pool $disk"; exit 1; }
+      echo zfs clone ${pool}/${disk}@clonesrc ${pool}/${disk/$CTID/$NEWID} || { echo "Error creating clone."; exit 1; }
+   done
+   
+   echo cp /etc/pve/lxc/${CTID}.conf /tmp/${NEWID}.conf || { echo "Error copying configuration file"; exit 1; }
+   echo sed -i "s#${CTID}#${NEWID}#g" /tmp/${NEWID}.conf || { echo "Error modifying new configuration file"; exit 1; }
+   echo mv /tmp/${NEWID}.conf /etc/pve/lxc || { echo "Error placing new configuration file"; exit 1; }
+}
+
+main() {
+   test "$#" -ne 2 && usage
+   CTID="$1"
+   NEWID="$2"
+   pct list | grep "^$CTID " > /dev/null
+   test "$?" -ne 0 && { echo "Can not find container $CTID."; usage; }
+   pct list | grep "^$NEWID " > /dev/null
+   test "$?" -eq 0 && { echo "There already is a container with $NEWID."; usage; }
+   clone
+   echo "Clone done. Make any required changed to config of container $NEWID."
+}
+
+main "$@"
