@@ -8,19 +8,32 @@ usage() {
 }
 
 clone() {
-   echo pct snapshot ${CTID} clonesrc
+   newcfg=$(mktemp)
+   cp /etc/pve/lxc/"${CTID}".conf "$newcfg" || \
+      { echo "Error copying configuration file"; exit 1; }
+   sed -i "s#${CTID}#${NEWID}#g" "$newcfg" || \
+      { echo "Error modifying new configuration file"; exit 1; }
+
+   pct snapshot "${CTID}" clonesrc
    
-   for fsid in $(sed -n "/^\(rootfs\|mp.\): / { s/^\(.*\): .*/\1/p }" /etc/pve/lxc/${CTID}.conf | sort -u); do
-      storeid=$(sed -n "/^${fsid}:/ { s/${fsid}: \(.*\):.*/\1/p;q}" /etc/pve/lxc/${CTID}.conf)
-      pool=$(grep -A 4 "zfspool: $storeid" /etc/pve/storage.cfg | sed -n "s/.*pool \(.*\)/\1/p")
-      disk=$(sed -n "/^${fsid}:/ { s/${fsid}: ${storeid}:\([^,]*\),.*/\1/p;q}" /etc/pve/lxc/${CTID}.conf)
-      test "$fsid" = "" -o "$storeid" = "" -o "$pool" = "" -o "$disk" = "" && { echo "Error for $fsid $storeid $pool $disk"; exit 1; }
-      echo zfs clone ${pool}/${disk}@clonesrc ${pool}/${disk/$CTID/$NEWID} || { echo "Error creating clone."; exit 1; }
+   for fsid in $(sed -n "/^\(rootfs\|mp.\): / { s/^\(.*\): .*/\1/p }" \
+      /etc/pve/lxc/"${CTID}".conf | sort -u); do
+      storeid=$(sed -n "/^${fsid}:/ { s/${fsid}: \(.*\):.*/\1/p;q}" \
+         /etc/pve/lxc/"${CTID}".conf)
+      pool=$(grep -A 4 "zfspool: $storeid" /etc/pve/storage.cfg | \
+         sed -n "s/.*pool \(.*\)/\1/p")
+      disk=$(sed -n "/^${fsid}:/ { s/${fsid}: ${storeid}:\([^,]*\),.*/\1/p;q}" \
+         /etc/pve/lxc/"${CTID}".conf)
+      test "$fsid" = "" -o "$storeid" = "" -o "$pool" = "" -o "$disk" = "" && \
+         { echo "Error for $fsid $storeid $pool $disk"; exit 1; }
+      zfs clone "${pool}/${disk}"@clonesrc "${pool}/${disk/$CTID/$NEWID}" || \
+         { echo "Error creating clone."; exit 1; }
    done
    
-   echo cp /etc/pve/lxc/${CTID}.conf /tmp/${NEWID}.conf || { echo "Error copying configuration file"; exit 1; }
-   echo sed -i "s#${CTID}#${NEWID}#g" /tmp/${NEWID}.conf || { echo "Error modifying new configuration file"; exit 1; }
-   echo mv /tmp/${NEWID}.conf /etc/pve/lxc || { echo "Error placing new configuration file"; exit 1; }
+   cp "$newcfg" /etc/pve/lxc/"${NEWID}".conf || \
+      { echo "Error placing new configuration file"; exit 1; }
+   rm -f "$newcfg" || \
+      { echo "Error removing temporary new configuration file"; exit 1; }
 }
 
 main() {
