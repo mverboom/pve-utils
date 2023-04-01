@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+#
+# Script to change uid/gid of many files as fast as possible with offset
+#
+
+CFG=/etc/pve/lxc
+OFFSET=100000
+
+test "$#" -ne 1 && { echo "Require ctid as argument."; exit 1; }
+
+CTID="${1}"
+
+test -f "${CFG}/${CTID}.conf" || { echo "Container $CTID not found."; exit 1; }
+
+grep '^lxc.mount.entry' "${CFG}/${CTID}.conf" > /dev/null && { echo "Extra mount active, not converting."; exit 1; }
+grep '^mp[0-9]' "${CFG}/${CTID}.conf" > /dev/null && { echo "Extra mount active, not converting."; exit 1; }
+IFS=':' read store id < <(pct config "$CTID" | sed '/^rootfs:/!d; s/rootfs: \(.\+:.\+\),.*/\1/')
+rootfs=$(pvesm path $store:$id)
+test -d "$rootfs" || { echo "Unable to determine path to rootfs."; exit 1; }
+echo "Will stop container, create snapshot and convert to unprivileged."
+read -p "Press enter to continue" in
+test "$( pct list | grep "^${CTID} " | grep "running")" != "" && {
+   echo "Stopping container..."
+   pct stop "$CTID"
+}
+pct snapshot "$CTID" priviledged
+cd "$rootfs"
+index=$(mktemp)
+find . -print0 | xargs -0 stat -c "%u %g %n" | sort > "$index"
+combos=( $(cut -d ' ' -f 1,2 "$index" | uniq) )
+items=$(( ${#combos[@]} - 1 ))
+total=$(( ${#combos[@]} / 2 ))
+count=1
+echo "Total of $total uid/gid combinations found."
+for idx in $(seq 0 2 $((${#combos[@]} - 1 )) ); do
+   pattern="${combos[$idx]} ${combos[$(( idx + 1 ))]}"
+   offset="$(( ${combos[$idx]} + OFFSET )):$(( ${combos[$(( idx + 1 ))]} + OFFSET ))"
+   printf "\e[K%d/%d %s\r" "$count" "$total" "Changing uid/gid ${pattern/ /:} to ${offset}..."
+   grep "^${pattern} " "$index" | cut -d' ' -f 3- | xargs chown -h "${offset}"
+   count=$((count + 1 ))
+   sleep 0.2
+done
+echo -e "\nDone."
+rm -f "$index"
