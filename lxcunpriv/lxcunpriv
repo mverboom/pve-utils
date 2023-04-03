@@ -36,7 +36,7 @@ for idx in $(seq 0 2 $((${#combos[@]} - 1 )) ); do
    pattern="${combos[$idx]} ${combos[$(( idx + 1 ))]}"
    offset="$(( ${combos[$idx]} + OFFSET )):$(( ${combos[$(( idx + 1 ))]} + OFFSET ))"
    printf "\e[K%d/%d %s\r" "$count" "$total" "Changing uid/gid ${pattern/ /:} to ${offset}..."
-   grep "^${pattern} " "$index" | cut -d' ' -f 3- | xargs chown -h "${offset}"
+   grep "^${pattern} " "$index" | cut -d' ' -f 3- | tr \\n \\0 | xargs -0 chown -h "${offset}"
    count=$((count + 1 ))
    sleep 0.2
 done
