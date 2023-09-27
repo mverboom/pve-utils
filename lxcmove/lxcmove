@@ -26,7 +26,7 @@ main() {
    type pv > /dev/null 2>&1 || { echo "Error, command pv not found."; usage; }
    test -e "$CFGLXC/$CT.conf" || { echo "Error, can't find lxc config file."; usage; }
    grep -q "^mp" "$CFGLXC/$CT.conf" && { echo "Additional mountpoints found, currently not supported."; usage; }
-   ssh -o StrictHostKeyChecking=yes $DST exit || { echo "Error, ssh to $DST does not seem to work."; usage; }
+   ssh -o StrictHostKeyChecking=yes $DST exit 0 || { echo "Error, ssh to $DST does not seem to work."; usage; }
    ssh $DST "test -e $CFGLXC/$CT.conf" && { echo "Error, $CT already exists on $DST."; usage; }
 
    storage=$(pct config "$CT" | sed '/^rootfs/!d; s/rootfs: \(.\+\),.*/\1/' )
@@ -48,8 +48,8 @@ main() {
    ssh $DST "zfs list $dstds > /dev/null 2>&1" || { echo "Storage $dstds does not exist on $DST."; usage; }
    ssh $DST "zfs list $dstds/$ds > /dev/null 2>&1" && { echo "Storage $dstds/$ds already exists on $DST."; usage; }
 
-   transfer=$(zfs list -H -p -o logicalused $srcds/$ds)
-   transferh=$(zfs list -H -o logicalused $srcds/$ds)
+   transfer=$(zfs list -H -p -o used $srcds/$ds)
+   transferh=$(zfs list -H -o used $srcds/$ds)
 
    if test "$(pct status $CT | grep running)" != ""; then
       run=1
