@@ -51,6 +51,8 @@ main() {
    transfer=$(zfs list -H -p -o used $srcds/$ds)
    transferh=$(zfs list -H -o used $srcds/$ds)
 
+   refquota=$(zfs get refquota $srcds/$ds | grep ^$srcds/$ds | awk '{print $3}')
+
    if test "$(pct status $CT | grep running)" != ""; then
       run=1
    else
@@ -66,7 +68,7 @@ main() {
 
    echo "Sending full snapshot."
    zfs snapshot $srcds/$ds@migrate || { echo "Snapshot failed. Aborting."; exit 1; }
-   zfs send $srcds/$ds@migrate | pv -s $transfer | ssh $DST "zfs recv $dstds/$ds"
+   zfs send $srcds/$ds@migrate | pv -s $transfer | ssh -C $DST "zfs recv $dstds/$ds"
    [[ "${PIPESTATUS[@]}" != "0 0 0" ]] && { echo "Zfs transfer failed. Aborting."; exit 1;}
 
    if test "$run" -eq "1"; then
@@ -77,7 +79,7 @@ main() {
    echo "Sending incremental snapshot."
    zfs snapshot $srcds/$ds@migrate-i || { echo "Incremental snapshot failed. Aborting."; exit 1; }
    transfer=$(zfs list -H -p -o used $srcds/$ds@migrate)
-   zfs send -i $srcds/$ds@migrate $srcds/$ds@migrate-i | pv -s $transfer | ssh $DST "zfs recv -F $dstds/$ds"
+   zfs send -i $srcds/$ds@migrate $srcds/$ds@migrate-i | pv -s $transfer | ssh -C $DST "zfs recv -F $dstds/$ds"
    [[ "${PIPESTATUS[@]}" != "0 0 0" ]] && { echo "Zfs transfer failed. Aborting."; exit 1;}
 
    echo "Cleaning up snapshots on local side."
@@ -87,6 +89,9 @@ main() {
    echo "Cleaning up snapshots on $DST."
    ssh $DST "zfs destroy $dstds/$ds@migrate-i" || { echo "Snapshot destroy failed. Aborting."; exit 1; }
    ssh $DST "zfs destroy $dstds/$ds@migrate" || { echo "Snapshot destroy failed. Aborting."; exit 1; }
+
+   echo "Setting refquota on $DST."
+   ssh $DST "zfs set refquota=$refquota $dstds/$ds" || { echo "Refquota set failed. Aborting."; exit 1; }
 
    echo "Changing container configuration."
    mv $CFGLXC/$CT.conf /tmp || { echo "Config move failed. Aborting."; exit 1; }
